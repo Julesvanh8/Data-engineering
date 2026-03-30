@@ -4,4 +4,3 @@ requests
 matplotlib
 jupyter
 statsmodels
-python-dotenv
