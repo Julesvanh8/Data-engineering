@@ -205,3 +205,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Data Engineering Project specific
+# Raw and processed data files (regenerate with scripts)
+data/raw/*.csv
+data/processed/*.csv
+
+# Output files (regenerate with scripts)
+outputs/figures/*.png
+outputs/figures/*.jpg
+outputs/figures/*.pdf
+outputs/tables/*.csv
+
+# Keep directory structure with .gitkeep files
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!outputs/figures/.gitkeep
+!outputs/tables/.gitkeep
+
+# Environment files
+.env
+
+# MacOS
+.DS_Store
