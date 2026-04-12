@@ -6,3 +6,5 @@ jupyter
 statsmodels
 xlrd
 openpyxl
+seaborn
+scipy
