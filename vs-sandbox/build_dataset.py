@@ -74,7 +74,7 @@ def load_tax(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def _save_tax_sources(fred: pd.DataFrame, treasury: pd.DataFrame) -> None:
-    """Save FRED and Treasury as separate columns for comparison plots."""
+    """Save FRED (full range from DB) and Treasury as separate columns."""
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     merged = fred[["receipts_bn"]].rename(columns={"receipts_bn": "fred_bn"}) \
         .join(treasury[["receipts_bn"]].rename(columns={"receipts_bn": "treasury_bn"}), how="outer")
@@ -84,14 +84,32 @@ def _save_tax_sources(fred: pd.DataFrame, treasury: pd.DataFrame) -> None:
 
 
 def _seasonal_adjust(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Return df with col replaced by its seasonally-adjusted values."""
-    series = df[col].asfreq("MS")          # ensure regular monthly freq
-    result = seasonal_decompose(series, model="additive", period=12, extrapolate_trend="freq")
-    adjusted = series - result.seasonal
+    """Return df with col replaced by its seasonally-adjusted values.
+
+    Builds a complete monthly DatetimeIndex from min→max, interpolates any
+    gaps, runs seasonal_decompose, then subtracts the seasonal component
+    from the original (non-interpolated) values.
+    If fewer than 24 observations exist the series is returned unchanged.
+    """
+    original = df[col].copy()
+
+    if original.notna().sum() < 24:
+        print(f"  Skipping seasonal adjustment — fewer than 24 observations.")
+        return df
+
+    # Fill the full monthly range so seasonal_decompose gets a regular series.
+    full_idx = pd.date_range(original.index.min(), original.index.max(), freq="MS")
+    series_full = original.reindex(full_idx).interpolate(method="linear")
+
+    result   = seasonal_decompose(series_full, model="additive", period=12,
+                                  extrapolate_trend="freq")
+    seasonal = result.seasonal
+
+    # Subtract seasonal component from the original sparse index.
+    adjusted = original - seasonal.reindex(original.index)
+
     df = df.copy()
-    # extrapolate_trend="freq" avoids NaN edges in the trend, but seasonal
-    # is always fully defined, so adjusted has no NaN.
-    df[col] = adjusted.reindex(df.index)
+    df[col] = adjusted
     print(f"  Treasury receipts seasonally adjusted (additive, period=12).")
     return df
 

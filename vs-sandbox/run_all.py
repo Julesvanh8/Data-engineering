@@ -28,11 +28,11 @@ if __name__ == "__main__":
     print("\n=== Unemployment (BLS) ===")
     store_unemployment(fetch_unemployment(api_key=os.getenv("BLS_API_KEY")))
 
-    print("\n=== Tax revenue (Treasury MTS, 2015–present) ===")
-    store_tax_revenue(fetch_tax_revenue())
-
     print("\n=== Tax revenue (FRED, 1995–2014) ===")
     store_tax_fred(fetch_tax_fred(api_key=os.getenv("FRED_API_KEY", "")))
+
+    print("\n=== Tax revenue (Treasury MTS, 2015–present) ===")
+    store_tax_revenue(fetch_tax_revenue())
 
     print("\n=== Building dataset ===")
     build_dataset()

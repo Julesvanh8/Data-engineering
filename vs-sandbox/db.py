@@ -33,9 +33,12 @@ def initialise_db() -> None:
             rate        REAL NOT NULL       -- U-3 unemployment rate (%)
         );
 
-        CREATE TABLE IF NOT EXISTS tax_revenue (
-            date        TEXT PRIMARY KEY,   -- YYYY-MM-01 (first of month)
-            receipts_bn REAL NOT NULL       -- individual income tax receipts (USD billions)
+        DROP TABLE IF EXISTS tax_revenue;
+        CREATE TABLE tax_revenue (
+            date        TEXT NOT NULL,      -- YYYY-MM-01 (first of month)
+            receipts_bn REAL NOT NULL,      -- individual income tax receipts (USD billions)
+            source      TEXT NOT NULL,      -- 'FRED_quarterly' or 'Treasury_monthly'
+            PRIMARY KEY (date, source)
         );
 
         CREATE TABLE IF NOT EXISTS gdp (
