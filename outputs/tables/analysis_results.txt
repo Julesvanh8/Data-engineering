@@ -1,0 +1,76 @@
+
+================================================================================
+RESULTATEN: LAGGED EFFECTS ANALYSE
+================================================================================
+
+ONDERZOEKSVRAAG:
+How long after a U.S. stock market downturn do unemployment and federal 
+income tax revenues change?
+
+================================================================================
+BELANGRIJKSTE BEVINDINGEN:
+================================================================================
+
+1. WERKLOOSHEID:
+   - Sterkste gemiddelde stijging: 1 maanden na downturn
+   - Gemiddelde verandering op dat moment: 0.311 %-punt
+   - Sterkste correlatie bij: 1 maanden
+   - Correlatie waarde: 0.185
+
+2. BELASTINGOPBRENGSTEN:
+   - Sterkste gemiddelde verandering: 4 maanden na downturn
+   - Gemiddelde verandering op dat moment: -10.46 miljard $
+   - Sterkste correlatie bij: 4 maanden
+   - Correlatie waarde: -0.120
+
+================================================================================
+CORRELATIE TABEL (per lag):
+================================================================================
+
+ lag_months  corr_unemployment_abs  corr_unemployment_pct  corr_tax_abs  corr_tax_pct  avg_unemployment_change  avg_tax_change  avg_unemployment_pct_change  avg_tax_pct_change
+          1               0.184677               0.174452     -0.045577     -0.087004                 0.311321       -1.632132                     6.379046           -0.387844
+          2               0.036884               0.029326     -0.057559     -0.065831                 0.062264       -3.083604                     1.243613           -0.161744
+          3               0.048769               0.042975     -0.051325     -0.070513                 0.081481       -2.266963                     1.711573           -0.204312
+          4               0.067637               0.046836     -0.119599     -0.146149                 0.112963      -10.456296                     1.846840           -1.004004
+          5               0.033231               0.030117     -0.044526     -0.062358                 0.055556       -1.451481                     1.261065           -0.118082
+          6               0.055918               0.029608     -0.069360     -0.070834                 0.094340       -4.513283                     1.253565           -0.215175
+          7               0.031568               0.023643      0.013450      0.032349                 0.053846        5.535154                     1.051003            0.890166
+          8               0.050773               0.034156     -0.030529      0.003409                 0.086538        0.153308                     1.426800            0.578001
+          9               0.032698               0.018210     -0.080794     -0.125698                 0.055769       -5.997788                     0.856802           -0.814657
+         10               0.014622               0.002228      0.015578      0.058039                 0.025000        5.795577                     0.285498            1.167285
+         11               0.034957               0.020603      0.005204      0.015992                 0.059615        4.526115                     0.942330            0.713726
+         12              -0.002323              -0.003911     -0.059969     -0.040045                -0.003846       -3.449365                     0.066049            0.109269
+
+
+================================================================================
+STATISTISCHE SIGNIFICANTIE (p-values < 0.05 zijn significant):
+================================================================================
+
+Lag | Werkloosheid p-value | Belastingen p-value | Significant?
+----|---------------------|---------------------|-------------
+  1 |              0.0000 |              0.1672 | Unemp:✓ Tax:✗
+  2 |              0.2637 |              0.0810 | Unemp:✗ Tax:✗
+  3 |              0.1394 |              0.1198 | Unemp:✗ Tax:✗
+  4 |              0.0403 |              0.0003 | Unemp:✓ Tax:✓
+  5 |              0.3140 |              0.1772 | Unemp:✗ Tax:✗
+  6 |              0.0901 |              0.0354 | Unemp:✗ Tax:✓
+  7 |              0.3388 |              0.6837 | Unemp:✗ Tax:✗
+  8 |              0.1238 |              0.3550 | Unemp:✗ Tax:✗
+  9 |              0.3218 |              0.0142 | Unemp:✗ Tax:✓
+ 10 |              0.6578 |              0.6370 | Unemp:✗ Tax:✗
+ 11 |              0.2895 |              0.8747 | Unemp:✗ Tax:✗
+ 12 |              0.9439 |              0.0690 | Unemp:✗ Tax:✗
+
+================================================================================
+CONCLUSIE:
+================================================================================
+
+Na een stock market downturn (≥5% maandelijkse daling):
+
+• WERKLOOSHEID stijgt het meest na ongeveer 1 maanden
+• BELASTINGOPBRENGSTEN veranderen het meest na ongeveer 4 maanden
+
+Dit suggereert een vertraagd effect waarbij economische indicatoren
+pas enkele maanden na een marktcrash significant veranderen.
+
+================================================================================
