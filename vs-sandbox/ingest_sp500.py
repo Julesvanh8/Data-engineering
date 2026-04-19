@@ -14,7 +14,7 @@ import pandas as pd
 from db import get_connection, initialise_db
 
 
-START_DATE = "1995-01-01"   # covers all three downturn events with context
+START_DATE = "1948-01-01"
 TICKER     = "^GSPC"        # S&P 500
 
 

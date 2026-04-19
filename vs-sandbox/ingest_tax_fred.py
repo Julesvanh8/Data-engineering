@@ -3,7 +3,7 @@ ingest_tax_fred.py — fetch quarterly federal individual income tax receipts
 from FRED (series W006RC1Q027SBEA) and store in SQLite.
 
 This covers 1947 onwards at quarterly frequency. Used for dot-com (2000)
-and GFC (2008) analysis where Treasury MTS data is unavailable.
+and Global Financial Crisis (2008) analysis where Treasury MTS data is unavailable.
 
 Usage:
     python ingestion/ingest_tax_fred.py
@@ -42,7 +42,7 @@ def fetch_tax_fred(api_key: str) -> pd.DataFrame:
         "series_id":        FRED_SERIES,
         "api_key":          api_key,
         "file_type":        "json",
-        "observation_start": "1995-01-01",
+        "observation_start": "1947-01-01",
     }
     resp = requests.get(FRED_API_URL, params=params, timeout=30)
     resp.raise_for_status()
@@ -89,7 +89,7 @@ def store_tax_fred(df: pd.DataFrame) -> None:
     """, rows)
     conn.commit()
     conn.close()
-    print(f"Stored {len(rows)} FRED tax rows (1995–present, forward-filled from quarterly).")
+    print(f"Stored {len(rows)} FRED tax rows (1948–present, forward-filled from quarterly).")
 
 
 if __name__ == "__main__":

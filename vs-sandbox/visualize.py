@@ -27,13 +27,18 @@ FIGURES   = Path(__file__).resolve().parents[1] / "outputs" / "figures"
 MAIN_CSV         = PROCESSED / "merged_monthly_vs.csv"
 LAG_CSV          = PROCESSED / "lag_results.csv"
 RAW_EVENT_CSV    = PROCESSED / "event_study_raw.csv"
+NAMED_EVENT_CSV  = PROCESSED / "named_event_lags.csv"
 TAX_SOURCES_CSV  = PROCESSED / "tax_sources.csv"
+FRED_UNRATE_CSV  = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
+FRIEND_SP500_CSV = Path(__file__).resolve().parents[1] / "data" / "raw" / "github_sp500_daily.csv"
+CATALOG_CSV      = PROCESSED / "downturn_catalog.csv"
 
-DOWNTURN_COLORS = {
-    "Dot-com crash": "#ffcccc",
-    "GFC":           "#ffd9b3",
-    "COVID crash":   "#cce5ff",
+NAMED_COLORS = {
+    "Dot-com crash":           "#ffcccc",
+    "Global Financial Crisis": "#ffd9b3",
+    "COVID crash":             "#cce5ff",
 }
+OTHER_COLOR = "#e0e0e0"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -52,59 +57,91 @@ def load_raw_events() -> pd.DataFrame:
     return pd.read_csv(RAW_EVENT_CSV)
 
 
+def load_named_events() -> pd.DataFrame:
+    return pd.read_csv(NAMED_EVENT_CSV)
+
+
+def load_friend_sp500() -> pd.Series:
+    df = pd.read_csv(FRIEND_SP500_CSV, parse_dates=["date"], index_col="date")
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
+    return df["close"]
+
+
+def load_fred_unrate() -> pd.Series:
+    df = pd.read_csv(FRED_UNRATE_CSV, parse_dates=["date"], index_col="date")
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
+    return df["UNRATE"]
+
+
 def load_tax_sources() -> pd.DataFrame:
     df = pd.read_csv(TAX_SOURCES_CSV, parse_dates=["date"], index_col="date")
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     return df
 
 
-def shade_downturns(ax, df: pd.DataFrame) -> None:
-    """Shade named downturn periods on an axis."""
-    for name, color in DOWNTURN_COLORS.items():
-        period = df[df["downturn_name"] == name]
-        if period.empty:
-            continue
-        ax.axvspan(period.index.min(), period.index.max(),
-                   color=color, alpha=0.4, label=name, zorder=0)
+def load_catalog() -> pd.DataFrame:
+    if not CATALOG_CSV.exists():
+        return pd.DataFrame(columns=["name", "start_date", "trough_date", "pct_drop", "duration_months"])
+    df = pd.read_csv(CATALOG_CSV, parse_dates=["start_date", "trough_date"])
+    return df
+
+
+def shade_downturns(ax, catalog: pd.DataFrame) -> None:
+    """Shade all catalog downturns: named ones in their color, others in gray."""
+    for _, row in catalog.iterrows():
+        color = NAMED_COLORS.get(row["name"], OTHER_COLOR)
+        ax.axvspan(row["start_date"], row["trough_date"],
+                   color=color, alpha=0.4, zorder=0)
 
 
 # ── plot 1: time series ───────────────────────────────────────────────────────
 
-def plot_time_series(df: pd.DataFrame, tax: pd.DataFrame) -> None:
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
-    fig.suptitle("U.S. Market & Macroeconomic Indicators (1995–2026)",
+def plot_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series,
+                     catalog: pd.DataFrame) -> None:
+    import numpy as np
+    fig, axes = plt.subplots(4, 1, figsize=(14, 13), sharex=True)
+    fig.suptitle("U.S. Market & Macroeconomic Indicators (1871–2026)",
                  fontsize=14, fontweight="bold")
 
     # Panel 1: S&P 500
-    axes[0].plot(df.index, df["close"], color="#1f77b4", linewidth=1.2)
-    shade_downturns(axes[0], df)
+    line_sp, = axes[0].plot(df.index, df["close"], color="#1f77b4", linewidth=1.2)
+    shade_downturns(axes[0], catalog)
     axes[0].set_ylabel("S&P 500 (close)", fontsize=9)
     axes[0].grid(True, alpha=0.3, linestyle="--")
+    named_patches = [mpatches.Patch(color=c, alpha=0.5, label=n)
+                     for n, c in NAMED_COLORS.items()]
+    other_patch   = mpatches.Patch(color=OTHER_COLOR, alpha=0.5, label="Other detected downturns")
+    axes[0].legend(handles=[line_sp] + named_patches + [other_patch],
+                   fontsize=8, loc="upper left")
 
-    # Panel 2: Unemployment
-    axes[1].plot(df.index, df["unemployment_rate"], color="#d62728", linewidth=1.2)
-    shade_downturns(axes[1], df)
-    axes[1].set_ylabel("Unemployment rate (%)", fontsize=9)
+    # Panel 2: S&P 500 log scale
+    line_log, = axes[1].plot(df.index, np.log(df["close"]), color="#1f77b4", linewidth=1.2)
+    shade_downturns(axes[1], catalog)
+    axes[1].set_ylabel("log(S&P 500)", fontsize=9)
     axes[1].grid(True, alpha=0.3, linestyle="--")
+    axes[1].legend(handles=[line_log], labels=["log(S&P 500)"], fontsize=8, loc="upper left")
 
-    # Panel 3: Tax — FRED and Treasury as separate lines
-    axes[2].plot(tax.index, tax["fred_bn"],     color="#2ca02c", linewidth=1.2,
-                 label="FRED (SAAR ÷ 12, seasonally adj.)")
-    axes[2].plot(tax.index, tax["treasury_bn"], color="#ff7f0e", linewidth=1.2,
-                 label="Treasury MTS (seasonally adj.)")
-    shade_downturns(axes[2], df)
-    axes[2].set_ylabel("Federal tax receipts (bn $)", fontsize=9)
+    # Panel 3: Unemployment — FRED UNRATE only
+    line_unemp, = axes[2].plot(fred_unrate.index, fred_unrate,
+                               color="#d62728", linewidth=1.2)
+    shade_downturns(axes[2], catalog)
+    axes[2].set_ylabel("Unemployment rate (%)", fontsize=9)
     axes[2].grid(True, alpha=0.3, linestyle="--")
-    axes[2].legend(fontsize=8, loc="upper left")
+    axes[2].legend(handles=[line_unemp], labels=["FRED UNRATE"],
+                   fontsize=8, loc="upper left")
 
-    # Downturn legend on top panel
-    handles = [mpatches.Patch(color=c, alpha=0.5, label=n)
-               for n, c in DOWNTURN_COLORS.items()]
-    axes[0].legend(handles=handles, fontsize=8, loc="upper left")
+    # Panel 4: Tax — FRED only
+    line_fred, = axes[3].plot(tax.index, tax["fred_bn"], color="#2ca02c", linewidth=1.2)
+    shade_downturns(axes[3], catalog)
+    axes[3].set_ylabel("Federal tax receipts (bn $)", fontsize=9)
+    axes[3].grid(True, alpha=0.3, linestyle="--")
+    axes[3].legend(handles=[line_fred],
+                   labels=["FRED W006RC1Q027SBEA (SAAR ÷ 12, seasonally adj.)"],
+                   fontsize=8, loc="upper left")
 
     axes[-1].set_xlabel("Date")
     fig.tight_layout()
-    fig.savefig(FIGURES / "time_series.png", dpi=150)
+    fig.savefig(FIGURES / "time_series.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  Saved time_series.png")
 
@@ -217,20 +254,74 @@ def plot_heatmap(lags: pd.DataFrame) -> None:
     print("  Saved heatmap.png")
 
 
+# ── plot 5: per-named-event lag analysis ──────────────────────────────────────
+
+PALETTE = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
+           "#edc948", "#b07aa1", "#ff9da7", "#9c755f"]
+
+def plot_named_event_lags(named: pd.DataFrame) -> None:
+    events = sorted(named["event"].unique(),
+                    key=lambda e: named[named["event"] == e]["lag"].count(), reverse=True)
+    colors = {e: PALETTE[i % len(PALETTE)] for i, e in enumerate(events)}
+
+    fig, (ax_u, ax_t) = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle("Lag Analysis per Downturn Event\n"
+                 "(change vs 6-month pre-event baseline)",
+                 fontsize=13, fontweight="bold")
+
+    lags = sorted(named["lag"].unique())
+
+    for event in events:
+        color = colors[event]
+        sub = named[named["event"] == event].set_index("lag").reindex(lags)
+        ax_u.plot(lags, sub["unemp_change"], color=color, linewidth=2,
+                  marker="o", markersize=5, label=event)
+        ax_t.plot(lags, sub["tax_change"],   color=color, linewidth=2,
+                  marker="o", markersize=5, label=event)
+
+    for ax in (ax_u, ax_t):
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
+        ax.set_xlabel("Months after downturn start")
+        ax.set_xticks(lags)
+        ax.grid(True, alpha=0.3, linestyle="--")
+
+    ax_u.legend(fontsize=9, loc="upper right")
+    ax_t.legend(fontsize=9, loc="lower left", ncol=2)
+
+    ax_u.set_title("Unemployment rate change (pp vs baseline)")
+    ax_u.set_ylabel("Percentage-point change")
+    ax_t.set_title("Tax receipts change (bn $ vs baseline)")
+    ax_t.set_ylabel("Change in bn $")
+
+    fig.tight_layout()
+    fig.savefig(FIGURES / "named_event_lags.png", dpi=150)
+    plt.close()
+    print("  Saved named_event_lags.png")
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def run() -> None:
     FIGURES.mkdir(parents=True, exist_ok=True)
 
     print("Loading data...")
-    df   = load_main()
-    lags = load_lags()
-    raw  = load_raw_events()
-    tax  = load_tax_sources()
+    df           = load_main()
+    lags         = load_lags()
+    raw          = load_raw_events()
+    named        = load_named_events()
+    tax          = load_tax_sources()
+    fred_unemp   = load_fred_unrate()
+    friend_sp500 = load_friend_sp500()
+    catalog      = load_catalog()
 
-    print("Generating plots...")
-    plot_time_series(df, tax)
+    if not catalog.empty:
+        print("\nDetected downturns (sorted by % drop):")
+        print(catalog[["name", "start_date", "trough_date", "pct_drop", "duration_months"]]
+              .to_string(index=False))
+
+    print("\nGenerating plots...")
+    plot_time_series(df, tax, fred_unemp, catalog)
     plot_event_study(raw)
+    plot_named_event_lags(named)
     plot_cross_correlation(lags)
     plot_heatmap(lags)
 

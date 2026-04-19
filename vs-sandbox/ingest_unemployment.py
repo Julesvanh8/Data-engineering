@@ -22,7 +22,7 @@ from db import get_connection, initialise_db
 
 BLS_API_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 SERIES_ID   = "LNS14000000"
-START_YEAR  = 1995
+START_YEAR  = 1948
 END_YEAR    = 2026   # BLS API returns up to 20 years per call; we loop in chunks
 
 

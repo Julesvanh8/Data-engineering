@@ -61,7 +61,7 @@ def fetch_tax_revenue() -> pd.DataFrame:
     df["date"]        = pd.to_datetime(df["record_date"]).dt.to_period("M").dt.to_timestamp()
     df["receipts_bn"] = pd.to_numeric(df["current_month_net_rcpt_amt"], errors="coerce") / 1_000_000_000
     df = df[["date", "receipts_bn"]].dropna()
-    df = df[df["date"] >= "1995-01-01"]
+    df = df[df["date"] >= "1948-01-01"]
     df = df.sort_values("date").set_index("date")
     df.index.name = "date"
     return df

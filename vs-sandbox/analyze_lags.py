@@ -22,13 +22,14 @@ from pathlib import Path
 from scipy import stats
 
 DATA_PATH      = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly_vs.csv"
-LAG_OUT        = Path(__file__).resolve().parents[1] / "data" / "processed" / "lag_results.csv"
-EVENT_RAW_OUT  = Path(__file__).resolve().parents[1] / "data" / "processed" / "event_study_raw.csv"
+LAG_OUT            = Path(__file__).resolve().parents[1] / "data" / "processed" / "lag_results.csv"
+EVENT_RAW_OUT      = Path(__file__).resolve().parents[1] / "data" / "processed" / "event_study_raw.csv"
+NAMED_EVENT_OUT    = Path(__file__).resolve().parents[1] / "data" / "processed" / "named_event_lags.csv"
+CATALOG_OUT        = Path(__file__).resolve().parents[1] / "data" / "processed" / "downturn_catalog.csv"
 
-MAX_LAG           = 18
-BASELINE_MONTHS   = 6    # months before downturn start used as pre-event baseline
-DROP_THRESHOLD    = -5.0 # S&P monthly % change below this triggers a downturn event
-CLUSTER_GAP       = 3    # consecutive drops within this many months = same event
+MAX_LAG              = 18
+BASELINE_MONTHS      = 6      # months before downturn start used as pre-event baseline
+DRAWDOWN_THRESHOLD   = -19.0  # % below running all-time high to trigger a bear-market event
 
 
 # ── load ──────────────────────────────────────────────────────────────────────
@@ -49,36 +50,189 @@ def downturn_starts_named(df: pd.DataFrame) -> dict:
     return events
 
 
+def _drawdown_series(df: pd.DataFrame) -> pd.Series:
+    """Running drawdown from all-time high: (close - peak) / peak * 100."""
+    close = df["close"].dropna()
+    return (close - close.cummax()) / close.cummax() * 100
+
+
 def detect_sp500_downturns(df: pd.DataFrame,
-                           threshold: float = DROP_THRESHOLD,
-                           gap: int = CLUSTER_GAP) -> dict:
+                           threshold: float = DRAWDOWN_THRESHOLD) -> dict:
     """
-    Identify downturn starts from S&P 500 monthly returns.
+    Identify one start date per bear-market cycle using peak-to-trough drawdown.
 
-    A 'downturn start' is the first month of a cluster of months where
-    pct_change < threshold.  Months within `gap` months of the previous
-    drop are merged into the same event so one crash = one event.
+    A downturn begins the first time the drawdown crosses below `threshold`
+    (default −20 %, the standard bear-market definition).  It ends when the
+    index recovers to a new all-time high (drawdown returns to 0).  That entire
+    decline counts as one event regardless of how volatile the path was.
 
-    Returns a dict {label: start_timestamp}.
+    Start date = the all-time-high peak that preceded the drawdown.
+    Returns a dict {label: peak_timestamp}.
     """
-    drops = df[df["pct_change"] < threshold].index.sort_values()
-    if drops.empty:
-        return {}
+    close    = df["close"].dropna()
+    dd       = _drawdown_series(df)
+    in_down  = False
+    events   = {}
 
-    events = {}
-    cluster_start = drops[0]
-    prev = drops[0]
+    for date, val in dd.items():
+        if not in_down and val <= threshold:
+            in_down   = True
+            peak_val  = close.cummax()[date]
+            # last date where close equalled that peak (= the actual ATH date)
+            peak_date = close[close == peak_val].index
+            peak_date = peak_date[peak_date <= date][-1]
+            label     = f"Downturn {peak_date.strftime('%b %Y')}"
+            events[label] = peak_date
+        elif in_down and val >= 0:
+            in_down = False
 
-    for date in drops[1:]:
-        months_apart = (date.year - prev.year) * 12 + (date.month - prev.month)
-        if months_apart > gap:
-            label = f"drop_{cluster_start.strftime('%Y-%m')}"
-            events[label] = cluster_start
-            cluster_start = date
-        prev = date
-
-    events[f"drop_{cluster_start.strftime('%Y-%m')}"] = cluster_start
     return events
+
+
+NAMED_EVENTS = {
+    "Dot-com crash":           ("2000-03-01", "2002-10-01"),
+    "Global Financial Crisis": ("2007-10-01", "2009-03-01"),
+    "COVID crash":             ("2020-02-01", "2020-04-01"),
+}
+
+# Official start dates shown in catalog / deep-dive (may differ from auto-detected peak)
+NAMED_EVENT_STARTS = {
+    "COVID crash": pd.Timestamp("2020-02-01"),
+}
+
+
+def build_downturn_catalog(df: pd.DataFrame,
+                           threshold: float = DRAWDOWN_THRESHOLD) -> pd.DataFrame:
+    """
+    For every bear-market cycle (drawdown > threshold from ATH), compute:
+      - start_date        : date of the preceding all-time-high peak
+      - trough_date       : lowest close within the drawdown period
+      - peak_close / trough_close
+      - pct_drop          : peak-to-trough %
+      - duration_months   : peak to trough in months
+      - name              : named label if overlaps a known event, else auto-label
+      - unemp_lag_months  : first month unemployment rises ≥19 % above pre-event baseline
+      - tax_lag_months    : first month tax revenue drops ≥19 % below pre-event baseline
+
+    The trough window is the actual drawdown period (peak → next ATH recovery),
+    so no arbitrary month cap is needed.
+    """
+    def _indicator_lag(series: pd.Series, start: pd.Timestamp, direction: str):
+        # First month after start where the indicator moves in the given direction vs start value
+        at_start = series[series.index <= start].iloc[-1] if not series[series.index <= start].empty else None
+        if at_start is None or pd.isna(at_start):
+            return None
+        for date, val in series[series.index > start].items():
+            if direction == "up"   and val > at_start:
+                return (date.year - start.year) * 12 + (date.month - start.month)
+            if direction == "down" and val < at_start:
+                return (date.year - start.year) * 12 + (date.month - start.month)
+        return None
+
+    close = df["close"].dropna()
+    dd    = _drawdown_series(df)
+
+    # Collect (peak_date, recovery_date) pairs for each bear market
+    periods = []
+    in_down    = False
+    peak_date  = None
+
+    for date, val in dd.items():
+        if not in_down and val <= threshold:
+            in_down   = True
+            peak_val  = close.cummax()[date]
+            pd_candidates = close[close == peak_val].index
+            peak_date = pd_candidates[pd_candidates <= date][-1]
+        elif in_down and val >= 0:
+            in_down = False
+            periods.append((peak_date, date))
+
+    if in_down and peak_date is not None:          # open downturn at end of data
+        periods.append((peak_date, close.index[-1]))
+
+    rows = []
+    for peak_dt, recovery_dt in periods:
+        window       = close[peak_dt:recovery_dt]
+        trough_date  = window.idxmin()
+        peak_close   = close[peak_dt]
+        trough_close = close[trough_date]
+        pct_drop     = (trough_close - peak_close) / peak_close * 100
+        duration     = (trough_date.year - peak_dt.year) * 12 + (trough_date.month - peak_dt.month)
+
+        label = f"Downturn {peak_dt.strftime('%b %Y')}"
+        name  = label
+        for n, (ns, ne) in NAMED_EVENTS.items():
+            ns_ts = pd.Timestamp(ns)
+            months_from_start = (peak_dt.year - ns_ts.year) * 12 + (peak_dt.month - ns_ts.month)
+            if ns_ts <= peak_dt <= pd.Timestamp(ne) or abs(months_from_start) <= 2:
+                name = n
+                break
+
+        catalog_start = NAMED_EVENT_STARTS.get(name, peak_dt)
+        rows.append({
+            "label":            label,
+            "name":             name,
+            "start_date":       catalog_start,
+            "trough_date":      trough_date,
+            "peak_close":       round(peak_close, 2),
+            "trough_close":     round(trough_close, 2),
+            "pct_drop":         round(pct_drop, 2),
+            "duration_months":  duration,
+            "unemp_lag_months": _indicator_lag(df["unemployment_rate"], catalog_start, "up"),
+            "tax_lag_months":   _indicator_lag(df["receipts_bn"],       catalog_start, "down"),
+        })
+
+    # Always include named events even if their drawdown didn't reach the threshold
+    covered_names = {r["name"] for r in rows}
+    for name, (ns, ne) in NAMED_EVENTS.items():
+        if name in covered_names:
+            continue
+        window = close[pd.Timestamp(ns):pd.Timestamp(ne)]
+        if window.empty:
+            continue
+        peak_dt      = window.idxmax()
+        trough_date  = window.idxmin()
+        peak_close   = close[peak_dt]
+        trough_close = close[trough_date]
+        pct_drop     = (trough_close - peak_close) / peak_close * 100
+        duration     = (trough_date.year - peak_dt.year) * 12 + (trough_date.month - peak_dt.month)
+        named_start = NAMED_EVENT_STARTS.get(name, peak_dt)
+        rows.append({
+            "label":            f"drop_{peak_dt.strftime('%Y-%m')}",
+            "name":             name,
+            "start_date":       named_start,
+            "trough_date":      trough_date,
+            "peak_close":       round(peak_close, 2),
+            "trough_close":     round(trough_close, 2),
+            "pct_drop":         round(pct_drop, 2),
+            "duration_months":  duration,
+            "unemp_lag_months": _indicator_lag(df["unemployment_rate"], named_start, "up"),
+            "tax_lag_months":   _indicator_lag(df["receipts_bn"],       named_start, "down"),
+        })
+
+    catalog = pd.DataFrame(rows).sort_values("pct_drop")
+    catalog.to_csv(CATALOG_OUT, index=False)
+    print(f"  Saved {CATALOG_OUT.name}  ({len(catalog)} events)")
+    return catalog
+
+
+def all_event_starts(df: pd.DataFrame) -> dict:
+    """Combined event set: drawdown-detected + named, with named labels taking priority."""
+    detected = detect_sp500_downturns(df)
+    named    = downturn_starts_named(df)
+
+    def _near_named(date: pd.Timestamp) -> bool:
+        """True if date falls inside a named window OR within 2 months of its start."""
+        for _, (ns, ne) in NAMED_EVENTS.items():
+            ns_ts, ne_ts = pd.Timestamp(ns), pd.Timestamp(ne)
+            months_from_start = (date.year - ns_ts.year) * 12 + (date.month - ns_ts.month)
+            if ns_ts <= date <= ne_ts or abs(months_from_start) <= 2:
+                return True
+        return False
+
+    combined = {k: v for k, v in detected.items() if not _near_named(v)}
+    combined.update(named)
+    return combined
 
 
 def pre_event_baseline(df: pd.DataFrame, start: pd.Timestamp) -> dict:
@@ -95,7 +249,7 @@ def run_event_study(df: pd.DataFrame) -> pd.DataFrame:
     For each detected S&P 500 downturn and each lag 1-MAX_LAG, compute the
     absolute change from the pre-event baseline in unemployment rate and tax receipts.
     """
-    starts = detect_sp500_downturns(df)
+    starts = all_event_starts(df)
     rows = []
     for event, start in starts.items():
         base = pre_event_baseline(df, start)
@@ -176,6 +330,30 @@ def run_cross_correlation(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# ── named-event breakdown ─────────────────────────────────────────────────────
+
+def run_named_event_study(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Event study for ALL identified downturns: auto-detected + named.
+    Returns a DataFrame with columns: event, lag, unemp_change, tax_change.
+    """
+    rows = []
+    for event, start in sorted(all_event_starts(df).items(), key=lambda x: x[1]):
+        base = pre_event_baseline(df, start)
+        for lag in range(1, MAX_LAG + 1):
+            target = (start + pd.DateOffset(months=lag)).to_period("M").to_timestamp()
+            if target not in df.index:
+                continue
+            obs = df.loc[target]
+            rows.append({
+                "event":        event,
+                "lag":          lag,
+                "unemp_change": obs["unemployment_rate"] - base["unemployment_rate"],
+                "tax_change":   obs["receipts_bn"]       - base["receipts_bn"],
+            })
+    return pd.DataFrame(rows)
+
+
 # ── summary print ─────────────────────────────────────────────────────────────
 
 def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
@@ -206,13 +384,21 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     print(f"  {len(df)} rows  ({df.index.min().date()} → {df.index.max().date()})")
 
     events = detect_sp500_downturns(df)
-    print(f"  Detected {len(events)} downturn events from S&P 500 (threshold {DROP_THRESHOLD}%):")
+    print(f"  Detected {len(events)} bear-market events (drawdown threshold {DRAWDOWN_THRESHOLD}%):")
     for label, start in sorted(events.items(), key=lambda x: x[1]):
         print(f"    {label}  →  start {start.date()}")
+
+    print("Building downturn catalog...")
+    build_downturn_catalog(df)
 
     print("Running event study...")
     raw   = run_event_study(df)
     agg   = aggregate_event_study(raw)
+
+    print("Running named-event study (Dot-com, Global Financial Crisis, COVID)...")
+    named_raw = run_named_event_study(df)
+    named_raw.to_csv(NAMED_EVENT_OUT, index=False)
+    print(f"  Saved {NAMED_EVENT_OUT.name}")
 
     print("Running cross-correlation analysis...")
     xcorr = run_cross_correlation(df)

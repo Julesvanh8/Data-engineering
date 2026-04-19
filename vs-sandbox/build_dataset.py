@@ -20,8 +20,10 @@ from pathlib import Path
 from statsmodels.tsa.seasonal import seasonal_decompose
 
 
-DB_PATH        = Path(__file__).resolve().parents[1] / "data" / "raw" / "market_data.db"
-PROCESSED_DIR  = Path(__file__).resolve().parents[1] / "data" / "processed"
+DB_PATH           = Path(__file__).resolve().parents[1] / "data" / "raw" / "market_data.db"
+SHILLER_CSV       = Path(__file__).resolve().parents[1] / "data" / "raw" / "github_sp500_daily.csv"
+FRED_UNRATE_CSV   = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
+PROCESSED_DIR     = Path(__file__).resolve().parents[1] / "data" / "processed"
 OUTPUT_PATH       = PROCESSED_DIR / "merged_monthly_vs.csv"
 TAX_SOURCES_PATH  = PROCESSED_DIR / "tax_sources.csv"
 PLOT_PATH         = PROCESSED_DIR / "tax_source_comparison.png"
@@ -38,18 +40,27 @@ def load_table(conn: sqlite3.Connection, query: str) -> pd.DataFrame:
 
 # ── load ─────────────────────────────────────────────────────────────────────
 
-def load_sp500(conn: sqlite3.Connection) -> pd.DataFrame:
-    return load_table(conn, "SELECT date, close, pct_change FROM sp500")
+def load_sp500(_conn) -> pd.DataFrame:
+    """Load S&P 500 from Shiller historical CSV (1871–present)."""
+    df = pd.read_csv(SHILLER_CSV, parse_dates=["date"], index_col="date")
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
+    df = df[["close"]].sort_index()
+    df["pct_change"] = df["close"].pct_change() * 100
+    return df
 
 
-def load_unemployment(conn: sqlite3.Connection) -> pd.DataFrame:
-    return load_table(conn, "SELECT date, rate AS unemployment_rate FROM unemployment")
+def load_unemployment(_conn) -> pd.DataFrame:
+    """Load FRED UNRATE from CSV (1948–present)."""
+    df = pd.read_csv(FRED_UNRATE_CSV, parse_dates=["date"], index_col="date")
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
+    df = df.rename(columns={"UNRATE": "unemployment_rate"})
+    return df
 
 
 def load_tax(conn: sqlite3.Connection) -> pd.DataFrame:
     """
-    Stitch FRED (pre-2015) and Treasury (2015+) into one series for analysis.
-    Also saves tax_sources.csv with both full series for visualisation.
+    Use FRED (W006RC1Q027SBEA) for the full analysis period 1995–present.
+    Treasury data is saved separately in tax_sources.csv for comparison only.
     Returns a DataFrame with columns: receipts_bn, tax_source.
     """
     df = load_table(conn, "SELECT date, receipts_bn, source FROM tax_revenue")
@@ -60,17 +71,15 @@ def load_tax(conn: sqlite3.Connection) -> pd.DataFrame:
     # FRED W006RC1Q027SBEA is SAAR — divide by 12 for monthly equivalent.
     fred["receipts_bn"] = fred["receipts_bn"] / 12
 
-    # Seasonally adjust Treasury so both series are comparable.
+    # Seasonally adjust Treasury for the comparison plot only.
     treasury = _seasonal_adjust(treasury, "receipts_bn")
 
     # Save both full series for side-by-side visualisation.
     _save_tax_sources(fred, treasury)
 
-    # Stitch: FRED pre-2015, Treasury 2015+ (Treasury wins on overlap).
-    fred_stitched = fred[fred.index < "2015-01-01"]
-    combined = pd.concat([fred_stitched, treasury]).sort_index()
-    combined = combined.rename(columns={"source": "tax_source"})
-    return combined
+    # Analysis uses FRED only for the full period.
+    fred = fred.rename(columns={"source": "tax_source"})
+    return fred
 
 
 def _save_tax_sources(fred: pd.DataFrame, treasury: pd.DataFrame) -> None:

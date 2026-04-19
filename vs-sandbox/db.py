@@ -59,7 +59,7 @@ def initialise_db() -> None:
         INSERT OR IGNORE INTO downturn_events (name, start_date, end_date) VALUES (?, ?, ?)
     """, [
         ("Dot-com crash",  "2000-03-01", "2002-10-01"),
-        ("GFC",            "2007-10-01", "2009-03-01"),
+        ("Global Financial Crisis",            "2007-10-01", "2009-03-01"),
         ("COVID crash",    "2020-02-01", "2020-03-01"),
     ])
 
