@@ -17,13 +17,10 @@ from pathlib import Path
 
 ROOT        = Path(__file__).resolve().parents[1]
 PROCESSED   = ROOT / "data" / "processed"
-RAW         = ROOT / "data" / "raw"
 
-MAIN_CSV        = PROCESSED / "merged_monthly_vs.csv"
-LAG_CSV         = PROCESSED / "lag_results.csv"
-EVENTS_CSV      = PROCESSED / "events_combined.csv"
-TAX_SOURCES_CSV = PROCESSED / "tax_sources.csv"
-FRED_UNRATE_CSV = RAW / "fred_unrate.csv"
+MAIN_CSV    = PROCESSED / "merged_monthly_vs.csv"
+LAG_CSV     = PROCESSED / "lag_results.csv"
+EVENTS_CSV  = PROCESSED / "events_combined.csv"
 
 NAMED_EVENT_NAMES = {"Dot-com crash", "Global Financial Crisis", "COVID crash"}
 
@@ -63,36 +60,33 @@ def load_named_events() -> pd.DataFrame:
     return df[df["name"].isin(NAMED_EVENT_NAMES)]
 
 @st.cache_data
-def load_tax_sources() -> pd.DataFrame:
-    df = pd.read_csv(TAX_SOURCES_CSV, parse_dates=["date"], index_col="date")
-    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
-    return df
-
-@st.cache_data
-def load_fred_unrate() -> pd.Series:
-    df = pd.read_csv(FRED_UNRATE_CSV, parse_dates=["date"], index_col="date")
-    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
-    return df["UNRATE"]
-
-@st.cache_data
 def load_catalog() -> pd.DataFrame:
     if not EVENTS_CSV.exists():
-        return pd.DataFrame(columns=["name", "start_date", "trough_date", "pct_drop"])
-    df = pd.read_csv(EVENTS_CSV, parse_dates=["start_date", "trough_date"])
-    for col in ("unemp_lag_months", "tax_lag_months", "duration_trough_unemp", "duration_trough_tax"):
+        return pd.DataFrame(columns=["name", "sp500_start", "sp500_trough", "sp500_pct_drop"])
+    df = pd.read_csv(EVENTS_CSV, parse_dates=["sp500_start", "sp500_trough",
+                                               "unemp_event_start", "unemp_peak_date",
+                                               "tax_event_start",   "tax_trough_date"])
+    for col in ("unemp_lag_months", "tax_lag_months", "sp500_duration"):
         if col in df.columns:
             df[col] = df[col].astype("Int64")
     return df.drop_duplicates(subset=["name"]).reset_index(drop=True)
 
 
-# ── downturn shading helper ───────────────────────────────────────────────────
+# ── period shading helper ─────────────────────────────────────────────────────
 
-def add_downturn_shapes(fig, catalog: pd.DataFrame, row: int = 1, col: int = 1):
+def add_period_shapes(fig, catalog: pd.DataFrame,
+                      start_col: str, end_col: str,
+                      row: int = 1, col: int = 1,
+                      label_events: bool = False):
     for _, r in catalog.iterrows():
+        s = r.get(start_col)
+        e = r.get(end_col)
+        if pd.isna(s) or pd.isna(e):
+            continue
         color = NAMED_COLORS.get(r["name"], OTHER_COLOR)
-        label = r["name"] if r["name"] in NAMED_COLORS else ""
+        label = r["name"] if (label_events and r["name"] in NAMED_COLORS) else ""
         fig.add_vrect(
-            x0=r["start_date"], x1=r["trough_date"],
+            x0=s, x1=e,
             fillcolor=color, line_width=0,
             annotation_text=label, annotation_position="top left",
             annotation_font_size=9,
@@ -102,20 +96,15 @@ def add_downturn_shapes(fig, catalog: pd.DataFrame, row: int = 1, col: int = 1):
 
 # ── page: time series ─────────────────────────────────────────────────────────
 
-def page_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series,
-                     catalog: pd.DataFrame):
+def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
     st.header("Time Series Overview")
     show_log = st.checkbox("Show log(S&P 500)", value=True)
-
-    df_f  = df
-    tax_f = tax
-    fr_f  = fred_unrate
 
     n_rows = 3 + (1 if show_log else 0)
     row_heights = ([0.28, 0.18] if show_log else [0.30]) + [0.26, 0.26]
     subplot_titles = (
         ["S&P 500 (Shiller)", "log(S&P 500)"] if show_log else ["S&P 500 (Shiller)"]
-    ) + ["Unemployment Rate (%)", "Federal Tax Receipts (bn $)"]
+    ) + ["Unemployment Rate (%)", "Federal Tax Receipts (bn $, monthly)"]
 
     fig = make_subplots(
         rows=n_rows, cols=1,
@@ -127,47 +116,49 @@ def page_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series
 
     # S&P 500
     fig.add_trace(go.Scatter(
-        x=df_f.index, y=df_f["close"],
+        x=df.index, y=df["close"],
         name="S&P 500 (Shiller)", line=dict(color="#1f77b4", width=1.2),
     ), row=1, col=1)
-    add_downturn_shapes(fig, catalog, row=1)
+    add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=1, label_events=True)
 
-    # log(S&P)
     log_row = 2
     if show_log:
         fig.add_trace(go.Scatter(
-            x=df_f.index, y=np.log(df_f["close"]),
+            x=df.index, y=np.log(df["close"]),
             name="log(S&P 500)", line=dict(color="#1f77b4", width=1.2, dash="dot"),
             showlegend=True,
         ), row=2, col=1)
-        add_downturn_shapes(fig, catalog, row=2)
+        add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=2)
     else:
-        log_row = 1  # skip
+        log_row = 1
 
     unemp_row = log_row + 1
     tax_row   = unemp_row + 1
 
-    # Unemployment — FRED only
+    # Unemployment
     fig.add_trace(go.Scatter(
-        x=fr_f.index, y=fr_f,
-        name="FRED UNRATE", line=dict(color="#d62728", width=1.2),
+        x=df.index, y=df["unemployment_rate"],
+        name="Unemployment rate", line=dict(color="#d62728", width=1.2),
     ), row=unemp_row, col=1)
-    add_downturn_shapes(fig, catalog, row=unemp_row)
+    add_period_shapes(fig, catalog, "unemp_event_start", "unemp_peak_date", row=unemp_row)
 
-    # Tax
-    if "fred_bn" in tax_f.columns:
-        fig.add_trace(go.Scatter(
-            x=tax_f.index, y=tax_f["fred_bn"],
-            name="FRED W006RC1Q027SBEA (SAAR÷12)", line=dict(color="#2ca02c", width=1.2),
-        ), row=tax_row, col=1)
-    add_downturn_shapes(fig, catalog, row=tax_row)
+    # Tax receipts
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["receipts_bn"],
+        name="Federal tax receipts (bn $)", line=dict(color="#2ca02c", width=1.2),
+    ), row=tax_row, col=1)
+    add_period_shapes(fig, catalog, "tax_event_start", "tax_trough_date", row=tax_row)
+
+    # Range slider on the bottom x-axis
+    last_xaxis = f"xaxis{n_rows}" if n_rows > 1 else "xaxis"
+    fig.update_layout(**{last_xaxis: dict(rangeslider=dict(visible=True, thickness=0.05))})
 
     fig.update_layout(
-        height=160 * n_rows + 120,
+        height=160 * n_rows + 160,
         title_text="U.S. Market & Macroeconomic Indicators",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.08, x=0),
-        margin=dict(l=60, r=30, t=60, b=60),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.12, x=0),
+        margin=dict(l=60, r=30, t=60, b=80),
         xaxis=dict(
             rangeselector=dict(
                 buttons=[
@@ -183,7 +174,7 @@ def page_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series
     st.plotly_chart(fig, width="stretch")
 
 
-# ── page: event study ─────────────────────────────────────────────────────────
+# ── page: research findings ───────────────────────────────────────────────────
 
 def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) -> None:
     st.header("Research Findings")
@@ -193,7 +184,10 @@ def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) 
     )
     st.markdown("---")
 
-    # ── derive headline numbers from event study ──────────────────────────────
+    if "lag" not in raw.columns or raw.empty:
+        st.info("Run `analyze_lags.py` to generate event study data.")
+        return
+
     avg_u = raw.groupby("lag")["unemp_change"].mean()
     avg_t = raw.groupby("lag")["tax_change"].mean()
 
@@ -203,11 +197,9 @@ def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) 
     first_pos_u = avg_u[avg_u > 0].index.min() if (avg_u > 0).any() else None
     first_neg_t = avg_t[avg_t < 0].index.min() if (avg_t < 0).any() else None
 
-    # median per-event trough lag from catalog
     cat_u = catalog["unemp_lag_months"].dropna()
     cat_t = catalog["tax_lag_months"].dropna()
 
-    # ── key metrics row ───────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Downturns analysed", len(catalog))
     c2.metric("Avg unemp peak response", f"month +{peak_u_lag}")
@@ -216,7 +208,6 @@ def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) 
 
     st.markdown("---")
 
-    # ── side-by-side event study charts ──────────────────────────────────────
     col_left, col_right = st.columns(2)
     lags_x = sorted(raw["lag"].unique())
 
@@ -284,6 +275,10 @@ def page_event_study(raw: pd.DataFrame):
         "The bold colored line is the average across all events."
     )
 
+    if "lag" not in raw.columns or raw.empty:
+        st.info("Run `analyze_lags.py` to generate event study data.")
+        return
+
     indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True)
     col_map = {"Unemployment": "unemp_change", "Tax receipts": "tax_change"}
     col = col_map[indicator]
@@ -325,6 +320,10 @@ def page_named_events(named: pd.DataFrame):
     st.header("Lag Analysis per Named Downturn")
     st.markdown("Change vs. 6-month pre-event baseline for Dot-com (2000), Global Financial Crisis (2008), and COVID (2020).")
 
+    if "lag" not in named.columns or named.empty:
+        st.info("Run `analyze_lags.py` to generate event study data.")
+        return
+
     indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True, key="ne_ind")
     col = "unemp_change" if indicator == "Unemployment" else "tax_change"
     ylabel = "pp change" if indicator == "Unemployment" else "% change vs baseline"
@@ -357,6 +356,81 @@ def page_named_events(named: pd.DataFrame):
         legend=legend_pos,
     )
     st.plotly_chart(fig, width="stretch")
+
+
+# ── page: lag distribution ───────────────────────────────────────────────────
+
+def page_lag_distribution(catalog: pd.DataFrame):
+    st.header("Lag Distribution")
+    st.markdown(
+        "For each detected downturn: how many months after the S&P 500 peak did "
+        "unemployment start rising and tax receipts start falling?"
+    )
+
+    if catalog.empty or "sp500_start" not in catalog.columns:
+        st.warning("No catalog found — run `analyze_lags.py` first.")
+        return
+
+    indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True, key="lagdist_ind")
+    lag_col  = "unemp_lag_months" if indicator == "Unemployment" else "tax_lag_months"
+    color    = "#d62728"          if indicator == "Unemployment" else "#2ca02c"
+    label    = "Months until unemployment starts rising" if indicator == "Unemployment" \
+               else "Months until tax receipts start falling"
+
+    sub = catalog[["name", "sp500_start", "sp500_pct_drop", lag_col]].dropna(subset=[lag_col]).copy()
+    sub = sub.sort_values(lag_col)
+    sub["sp500_start_str"] = pd.to_datetime(sub["sp500_start"]).dt.strftime("%Y-%m")
+
+    if sub.empty:
+        st.info("No events with a detected lag.")
+        return
+
+    median_lag = sub[lag_col].median()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Events with detected lag", len(sub))
+    col2.metric(f"Median {label.split()[2]} lag", f"{int(median_lag)} months")
+    col3.metric("Range", f"{int(sub[lag_col].min())}–{int(sub[lag_col].max())} months")
+
+    # Dot plot: one dot per event
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=sub[lag_col],
+        y=sub["sp500_start_str"] + "  " + sub["name"],
+        mode="markers",
+        marker=dict(color=color, size=10, line=dict(color="white", width=1)),
+        hovertemplate="<b>%{y}</b><br>Lag: %{x} months<extra></extra>",
+    ))
+    fig.add_vline(x=median_lag, line_dash="dash", line_color="gray",
+                  annotation_text=f"median {int(median_lag)}m",
+                  annotation_position="top right", annotation_font_size=11)
+    fig.update_layout(
+        xaxis_title=label,
+        height=max(300, 35 * len(sub) + 80),
+        margin=dict(l=220, r=40, t=30, b=50),
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    # Bar chart: lag vs S&P drop magnitude
+    st.subheader("Lag vs. S&P 500 drawdown magnitude")
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(
+        x=sub["sp500_pct_drop"].abs(),
+        y=sub[lag_col],
+        mode="markers+text",
+        text=sub["sp500_start_str"].str[:4],
+        textposition="top center",
+        marker=dict(color=color, size=9, opacity=0.8),
+        hovertemplate="<b>%{text}</b><br>Drop: %{x:.1f}%<br>Lag: %{y} months<extra></extra>",
+    ))
+    fig2.update_layout(
+        xaxis_title="S&P 500 peak-to-trough drop (%)",
+        yaxis_title=label,
+        height=380,
+        margin=dict(t=30, b=50),
+    )
+    st.plotly_chart(fig2, width="stretch")
 
 
 # ── page: cross-correlation ───────────────────────────────────────────────────
@@ -393,7 +467,6 @@ def page_cross_correlation(lags: pd.DataFrame):
     )
     st.plotly_chart(fig, width="stretch")
 
-    # Summary table
     st.subheader("Full lag table")
     show_cols = ["lag", "avg_unemp_change", "avg_tax_change",
                  "r_unemp", "p_unemp_xcorr", "r_tax", "p_tax_xcorr", "n_events"]
@@ -435,39 +508,41 @@ def page_heatmap(lags: pd.DataFrame):
 def page_catalog(catalog: pd.DataFrame):
     st.header("Detected Downturn Catalog")
     st.markdown(
-        "All S&P 500 downturns detected automatically (monthly return < −5%, "
-        "events within 3 months merged). Start = first drop below threshold; "
-        "Trough = lowest close within 24 months after start."
+        "All S&P 500 downturns detected automatically (≥19% drawdown from running ATH). "
+        "Shaded periods for unemployment and tax are when the respective series deteriorated."
     )
 
     if catalog.empty:
         st.warning("No catalog found — run `analyze_lags.py` first.")
         return
 
-    cols = ["name", "start_date", "trough_date", "peak_close", "trough_close",
-            "pct_drop", "duration_trough_sp500",
-            "unemp_lag_months", "unemp_rise_pp", "duration_trough_unemp",
-            "tax_lag_months",   "tax_drop_pct",  "duration_trough_tax"]
+    cols = ["name", "sp500_start", "sp500_trough", "sp500_pct_drop", "sp500_duration",
+            "unemp_lag_months", "unemp_event_start", "unemp_peak_date",
+            "tax_lag_months",   "tax_event_start",   "tax_trough_date"]
     display = catalog[[c for c in cols if c in catalog.columns]].copy()
-    display.columns = [{"name": "Event", "start_date": "Start", "trough_date": "Trough",
-                        "peak_close": "S&P at Start", "trough_close": "S&P at Trough",
-                        "pct_drop": "Drop (%)",
-                        "duration_trough_sp500":  "S&P trough (m)",
-                        "unemp_lag_months":        "Unemp rise starts (m)",
-                        "unemp_rise_pp":           "Unemp rise (pp)",
-                        "duration_trough_unemp":   "Unemp peaks (m)",
-                        "tax_lag_months":           "Tax drop starts (m)",
-                        "tax_drop_pct":             "Tax drop (%)",
-                        "duration_trough_tax":      "Tax troughs (m)"}[c]
-                       for c in cols if c in catalog.columns]
+
+    rename_map = {
+        "name":              "Event",
+        "sp500_start":       "S&P start",
+        "sp500_trough":      "S&P trough",
+        "sp500_pct_drop":    "Drop (%)",
+        "sp500_duration":    "S&P duration (m)",
+        "unemp_lag_months":  "Unemp lag (m)",
+        "unemp_event_start": "Unemp start",
+        "unemp_peak_date":   "Unemp peak",
+        "tax_lag_months":    "Tax lag (m)",
+        "tax_event_start":   "Tax start",
+        "tax_trough_date":   "Tax trough",
+    }
+    display.columns = [rename_map[c] for c in cols if c in catalog.columns]
     display = display.sort_values("Drop (%)")
-    for col in ("Start", "Trough"):
+
+    for col in ("S&P start", "S&P trough", "Unemp start", "Unemp peak", "Tax start", "Tax trough"):
         if col in display.columns:
             display[col] = pd.to_datetime(display[col]).dt.strftime("%Y-%m")
 
-    fmt = {"Drop (%)": "{:.1f}", "S&P at Start": "{:.0f}", "S&P at Trough": "{:.0f}",
-           "Unemp rise starts (m)": "{:.0f}", "Unemp rise (pp)": "{:.1f}", "Unemp peaks (m)": "{:.0f}",
-           "Tax drop starts (m)":   "{:.0f}", "Tax drop (%)":    "{:.1f}", "Tax troughs (m)":  "{:.0f}"}
+    fmt = {"Drop (%)": "{:.1f}", "S&P duration (m)": "{:.0f}",
+           "Unemp lag (m)": "{:.0f}", "Tax lag (m)": "{:.0f}"}
     st.dataframe(
         display.style.format(fmt, na_rep="—")
             .background_gradient(subset=["Drop (%)"], cmap="RdYlGn"),
@@ -475,11 +550,10 @@ def page_catalog(catalog: pd.DataFrame):
         hide_index=True,
     )
 
-    # Bar chart: top 15 by magnitude
     top = display.nsmallest(15, "Drop (%)")
     fig = go.Figure(go.Bar(
         x=top["Drop (%)"],
-        y=top["Start"].astype(str).str[:7] + " " + top["Event"],
+        y=top["S&P start"].astype(str).str[:7] + " " + top["Event"],
         orientation="h",
         marker_color=[
             NAMED_COLORS.get(e, OTHER_COLOR).replace("0.35", "0.8")
@@ -507,34 +581,30 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
         "tax revenue first drop compared to the value at the downturn start?"
     )
 
-    events = catalog.sort_values("start_date")["name"].tolist()
+    if catalog.empty or "sp500_start" not in catalog.columns:
+        st.warning("No catalog found — run `analyze_lags.py` first.")
+        return
+
+    events = catalog.sort_values("sp500_start")["name"].tolist()
     event  = st.selectbox("Select event", events)
     row    = catalog[catalog["name"] == event].iloc[0]
 
-    start_date  = pd.Timestamp(row["start_date"])
-    BEFORE      = 6
-    AFTER       = 24
-
-    window_start = start_date - pd.DateOffset(months=BEFORE)
-    window_end   = start_date + pd.DateOffset(months=AFTER)
-
-    # Slice to window so y-axis scales to visible data
+    start_date   = pd.Timestamp(row["sp500_start"])
+    window_start = start_date - pd.DateOffset(months=6)
+    window_end   = start_date + pd.DateOffset(months=24)
     w = df[window_start:window_end]
 
-    # Read lags from catalog (already computed in analyze_lags.py)
     lag_unemp = int(row["unemp_lag_months"]) if pd.notna(row.get("unemp_lag_months")) else None
     lag_tax   = int(row["tax_lag_months"])   if pd.notna(row.get("tax_lag_months"))   else None
 
     first_unemp = start_date + pd.DateOffset(months=lag_unemp) if lag_unemp else None
     first_tax   = start_date + pd.DateOffset(months=lag_tax)   if lag_tax   else None
 
-    # ── summary metrics ───────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
-    col1.metric("Peak-to-trough drop",      f"{row['pct_drop']:.1f}%")
+    col1.metric("Peak-to-trough drop",       f"{row['sp500_pct_drop']:.1f}%")
     col2.metric("Unemployment starts rising", f"month +{lag_unemp}" if lag_unemp else "not detected")
-    col3.metric("Tax revenue starts falling",  f"month +{lag_tax}"   if lag_tax   else "not detected")
+    col3.metric("Tax revenue starts falling", f"month +{lag_tax}"   if lag_tax   else "not detected")
 
-    # ── three-panel chart ─────────────────────────────────────────────────────
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True,
         subplot_titles=["S&P 500", "Unemployment Rate (%)", "Federal Tax Receipts (bn $)"],
@@ -542,34 +612,29 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
         vertical_spacing=0.07,
     )
 
-    # S&P 500
     fig.add_trace(go.Scatter(
         x=w.index, y=w["close"],
         name="S&P 500", line=dict(color="#1f77b4", width=1.5),
     ), row=1, col=1)
 
-    # Unemployment
     fig.add_trace(go.Scatter(
         x=w.index, y=w["unemployment_rate"],
         name="Unemployment", line=dict(color="#d62728", width=1.5),
     ), row=2, col=1)
 
-    # Tax
     fig.add_trace(go.Scatter(
         x=w.index, y=w["receipts_bn"],
         name="Tax receipts", line=dict(color="#2ca02c", width=1.5),
     ), row=3, col=1)
 
-    def vline(date: pd.Timestamp, row: int, color: str, dash: str = "solid", width: float = 1.5):
+    def vline(date: pd.Timestamp, vrow: int, color: str, dash: str = "solid", width: float = 1.5):
         fig.add_shape(type="line",
                       x0=date, x1=date, y0=0, y1=1, yref="y domain",
                       line=dict(color=color, width=width, dash=dash),
-                      row=row, col=1)
+                      row=vrow, col=1)
 
-    # Downturn start: dashed blue line on S&P panel only
     vline(start_date, 1, "#1f77b4", "dash", 1.5)
 
-    # Downturn start annotation on S&P panel
     if start_date in w.index:
         fig.add_annotation(
             x=start_date, y=df.loc[start_date, "close"],
@@ -577,7 +642,6 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
             ax=30, ay=-40, font=dict(size=10), row=1, col=1,
         )
 
-    # Unemployment rise: dashed red line + label
     if first_unemp:
         vline(first_unemp, 2, "#d62728", "dash")
         fig.add_annotation(x=first_unemp, y=1, yref="y2 domain",
@@ -585,7 +649,6 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
                            font=dict(color="#d62728", size=10),
                            xanchor="left", yanchor="top")
 
-    # Tax drop: dashed green line + label
     if first_tax:
         vline(first_tax, 3, "#2ca02c", "dash")
         fig.add_annotation(x=first_tax, y=1, yref="y3 domain",
@@ -617,21 +680,20 @@ def main():
         "in unemployment and federal income tax receipts."
     )
 
-    df         = load_main()
-    lags       = load_lags()
-    raw        = load_raw_events()
-    named      = load_named_events()
-    tax        = load_tax_sources()
-    fred_unemp = load_fred_unrate()
-    catalog    = load_catalog()
+    df      = load_main()
+    catalog = load_catalog()
+    lags    = load_lags() if LAG_CSV.exists() else pd.DataFrame()
+    raw     = load_raw_events()
+    named   = load_named_events()
 
     pages = {
         "Research Findings":    lambda: page_findings(lags, raw, catalog),
+        "Lag Distribution":     lambda: page_lag_distribution(catalog),
         "Event Study":          lambda: page_event_study(raw),
         "Per-Event Analysis":   lambda: page_named_events(named),
         "Event Deep Dive":      lambda: page_event_deepdive(df, catalog),
         "Downturn Catalog":     lambda: page_catalog(catalog),
-        "Time Series":          lambda: page_time_series(df, tax, fred_unemp, catalog),
+        "Time Series":          lambda: page_time_series(df, catalog),
         "Cross-Correlation":    lambda: page_cross_correlation(lags),
         "Heatmap":              lambda: page_heatmap(lags),
     }
