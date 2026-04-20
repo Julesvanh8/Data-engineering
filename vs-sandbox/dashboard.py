@@ -176,6 +176,98 @@ def page_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series
 
 # ── page: event study ─────────────────────────────────────────────────────────
 
+def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) -> None:
+    st.header("Research Findings")
+    st.markdown(
+        "**Research question:** How long after a U.S. stock market downturn do "
+        "unemployment and federal tax revenues change?"
+    )
+    st.markdown("---")
+
+    # ── derive headline numbers from event study ──────────────────────────────
+    avg_u = raw.groupby("lag")["unemp_change"].mean()
+    avg_t = raw.groupby("lag")["tax_change"].mean()
+
+    peak_u_lag = int(avg_u.idxmax())
+    peak_u_val = avg_u.max()
+
+    first_pos_u = avg_u[avg_u > 0].index.min() if (avg_u > 0).any() else None
+    first_neg_t = avg_t[avg_t < 0].index.min() if (avg_t < 0).any() else None
+
+    # median per-event trough lag from catalog
+    cat_u = catalog["unemp_lag_months"].dropna()
+    cat_t = catalog["tax_lag_months"].dropna()
+
+    # ── key metrics row ───────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Downturns analysed", len(catalog))
+    c2.metric("Avg unemp peak response", f"month +{peak_u_lag}")
+    c3.metric("Median unemp trough (per event)", f"month +{int(cat_u.median())}" if not cat_u.empty else "—")
+    c4.metric("Median tax peak (per event)",     f"month +{int(cat_t.median())}" if not cat_t.empty else "—")
+
+    st.markdown("---")
+
+    # ── side-by-side event study charts ──────────────────────────────────────
+    col_left, col_right = st.columns(2)
+    lags_x = sorted(raw["lag"].unique())
+
+    def _study_fig(col, color, ylabel, title):
+        fig = go.Figure()
+        for event in raw["event"].unique():
+            sub = raw[raw["event"] == event].set_index("lag").reindex(lags_x)
+            fig.add_trace(go.Scatter(
+                x=lags_x, y=sub[col], mode="lines",
+                line=dict(color="gray", width=0.7), opacity=0.3, showlegend=False,
+            ))
+        avg = raw.groupby("lag")[col].mean().reindex(lags_x)
+        fig.add_trace(go.Scatter(
+            x=lags_x, y=avg, mode="lines+markers", name="Average",
+            line=dict(color=color, width=2.5), marker=dict(size=5),
+        ))
+        fig.add_hline(y=0, line_dash="dash", line_color="black", line_width=0.8)
+        fig.update_layout(
+            title=title, xaxis_title="Months after downturn start",
+            yaxis_title=ylabel, height=380, showlegend=False,
+            margin=dict(t=40, b=40),
+        )
+        return fig
+
+    with col_left:
+        st.plotly_chart(
+            _study_fig("unemp_change", "#d62728", "pp change vs baseline",
+                       "Unemployment rate change after downturn"),
+            width="stretch",
+        )
+        if first_pos_u:
+            st.caption(f"Average unemployment first rises above baseline at month +{int(first_pos_u)}, "
+                       f"peaking at month +{peak_u_lag} (+{peak_u_val:.2f} pp).")
+        st.caption(f"Per-event median: unemployment trough at month +{int(cat_u.median())}" if not cat_u.empty else "")
+
+    with col_right:
+        st.plotly_chart(
+            _study_fig("tax_change", "#2ca02c", "bn $ change vs baseline",
+                       "Federal tax receipts change after downturn"),
+            width="stretch",
+        )
+        if first_neg_t:
+            st.caption(f"Average tax receipts first fall below baseline at month +{int(first_neg_t)}.")
+        else:
+            st.caption(
+                "Average tax receipts stay above the pre-event baseline across all lags — "
+                "the long-run upward trend dominates the average. "
+                "See Downturn Catalog for per-event timing."
+            )
+        st.caption(f"Per-event median: tax peak at month +{int(cat_t.median())}" if not cat_t.empty else "")
+
+    st.markdown("---")
+    st.markdown(
+        "**Methodology note:** The event study is the primary analysis — it is conditional on the "
+        f"{len(catalog)} identified bear markets (≥19% drawdown from ATH). "
+        "The cross-correlation (see sidebar) uses all ~900 months of data and is not event-conditional; "
+        "its signal is diluted by normal months but provides a larger-sample statistical validation."
+    )
+
+
 def page_event_study(raw: pd.DataFrame):
     st.header("Event Study: Impulse Response")
     st.markdown(
@@ -387,18 +479,6 @@ def page_catalog(catalog: pd.DataFrame):
 
 # ── page: event deep dive ─────────────────────────────────────────────────────
 
-def _first_change(series: pd.Series, start: pd.Timestamp, baseline: float,
-                  direction: str) -> pd.Timestamp | None:
-    """Return the first date after start where series moves in the given direction vs baseline."""
-    after = series[series.index > start]
-    for date, val in after.items():
-        if direction == "up"   and val > baseline:
-            return date
-        if direction == "down" and val < baseline:
-            return date
-    return None
-
-
 def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
     st.header("Event Deep Dive")
     st.markdown(
@@ -417,22 +497,15 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
     window_start = start_date - pd.DateOffset(months=BEFORE)
     window_end   = start_date + pd.DateOffset(months=AFTER)
 
-    # Pass full dataset so user can zoom freely; set initial range via layout
-    w = df
+    # Slice to window so y-axis scales to visible data
+    w = df[window_start:window_end]
 
-    # Reference: value at the event start date (same logic as S&P peak at downturn start)
-    ref_unemp = df.loc[start_date, "unemployment_rate"] if start_date in df.index \
-                else df[df.index <= start_date]["unemployment_rate"].iloc[-1]
-    ref_tax   = df.loc[start_date, "receipts_bn"] if start_date in df.index \
-                else df[df.index <= start_date]["receipts_bn"].iloc[-1]
+    # Read lags from catalog (already computed in analyze_lags.py)
+    lag_unemp = int(row["unemp_lag_months"]) if pd.notna(row.get("unemp_lag_months")) else None
+    lag_tax   = int(row["tax_lag_months"])   if pd.notna(row.get("tax_lag_months"))   else None
 
-    first_unemp = _first_change(df["unemployment_rate"], start_date, ref_unemp,  "up")
-    first_tax   = _first_change(df["receipts_bn"],       start_date, ref_tax,    "down")
-
-    lag_unemp = int((first_unemp.year - start_date.year) * 12 +
-                    (first_unemp.month - start_date.month)) if first_unemp else None
-    lag_tax   = int((first_tax.year   - start_date.year) * 12 +
-                    (first_tax.month  - start_date.month)) if first_tax else None
+    first_unemp = start_date + pd.DateOffset(months=lag_unemp) if lag_unemp else None
+    first_tax   = start_date + pd.DateOffset(months=lag_tax)   if lag_tax   else None
 
     # ── summary metrics ───────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
@@ -459,18 +532,12 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
         x=w.index, y=w["unemployment_rate"],
         name="Unemployment", line=dict(color="#d62728", width=1.5),
     ), row=2, col=1)
-    fig.add_hline(y=ref_unemp, line_dash="dot", line_color="#d62728",
-                  line_width=1, annotation_text=f"start {ref_unemp:.2f}%",
-                  annotation_position="bottom right", row=2, col=1)
 
     # Tax
     fig.add_trace(go.Scatter(
         x=w.index, y=w["receipts_bn"],
         name="Tax receipts", line=dict(color="#2ca02c", width=1.5),
     ), row=3, col=1)
-    fig.add_hline(y=ref_tax, line_dash="dot", line_color="#2ca02c",
-                  line_width=1, annotation_text=f"start {ref_tax:.1f} bn",
-                  annotation_position="bottom right", row=3, col=1)
 
     def vline(date: pd.Timestamp, row: int, color: str, dash: str = "solid", width: float = 1.5):
         fig.add_shape(type="line",
@@ -512,7 +579,6 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
         legend=dict(orientation="h", x=0, y=-0.08),
         margin=dict(l=60, r=30, t=60, b=60),
     )
-    fig.update_xaxes(range=[window_start, window_end])
     st.plotly_chart(fig, width="stretch")
 
 
@@ -539,13 +605,14 @@ def main():
     catalog    = load_catalog()
 
     pages = {
-        "Time Series":        lambda: page_time_series(df, tax, fred_unemp, catalog),
-        "Event Deep Dive":    lambda: page_event_deepdive(df, catalog),
-        "Downturn Catalog":   lambda: page_catalog(catalog),
-        "Event Study":        lambda: page_event_study(raw),
-        "Per-Event Analysis": lambda: page_named_events(named),
-        "Cross-Correlation":  lambda: page_cross_correlation(lags),
-        "Heatmap":            lambda: page_heatmap(lags),
+        "Research Findings":    lambda: page_findings(lags, raw, catalog),
+        "Event Study":          lambda: page_event_study(raw),
+        "Per-Event Analysis":   lambda: page_named_events(named),
+        "Event Deep Dive":      lambda: page_event_deepdive(df, catalog),
+        "Downturn Catalog":     lambda: page_catalog(catalog),
+        "Time Series":          lambda: page_time_series(df, tax, fred_unemp, catalog),
+        "Cross-Correlation":    lambda: page_cross_correlation(lags),
+        "Heatmap":              lambda: page_heatmap(lags),
     }
 
     with st.sidebar:

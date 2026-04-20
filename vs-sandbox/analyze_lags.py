@@ -27,9 +27,11 @@ EVENT_RAW_OUT      = Path(__file__).resolve().parents[1] / "data" / "processed" 
 NAMED_EVENT_OUT    = Path(__file__).resolve().parents[1] / "data" / "processed" / "named_event_lags.csv"
 CATALOG_OUT        = Path(__file__).resolve().parents[1] / "data" / "processed" / "downturn_catalog.csv"
 
-MAX_LAG              = 18
-BASELINE_MONTHS      = 6      # months before downturn start used as pre-event baseline
-DRAWDOWN_THRESHOLD   = -19.0  # % below running all-time high to trigger a bear-market event
+MAX_LAG                 = 23
+BASELINE_MONTHS         = 6      # months before downturn start used as pre-event baseline
+SP500_THRESHOLD         = -19.0  # % below running all-time high to trigger a bear-market event
+UNEMPLOYMENT_THRESHOLD  =  3.5   # pp absolute rise from trough to confirm unemployment increase
+FED_TAX_THRESHOLD       =  7.5   # % cumulative drop from peak to confirm tax revenue decline
 
 
 # ── load ──────────────────────────────────────────────────────────────────────
@@ -57,12 +59,12 @@ def _drawdown_series(df: pd.DataFrame) -> pd.Series:
 
 
 def detect_sp500_downturns(df: pd.DataFrame,
-                           threshold: float = DRAWDOWN_THRESHOLD) -> dict:
+                           threshold: float = SP500_THRESHOLD) -> dict:
     """
     Identify one start date per bear-market cycle using peak-to-trough drawdown.
 
     A downturn begins the first time the drawdown crosses below `threshold`
-    (default −20 %, the standard bear-market definition).  It ends when the
+    (default −19 %, the standard bear-market definition).  It ends when the
     index recovers to a new all-time high (drawdown returns to 0).  That entire
     decline counts as one event regardless of how volatile the path was.
 
@@ -102,7 +104,7 @@ NAMED_EVENT_STARTS = {
 
 
 def build_downturn_catalog(df: pd.DataFrame,
-                           threshold: float = DRAWDOWN_THRESHOLD) -> pd.DataFrame:
+                           threshold: float = SP500_THRESHOLD) -> pd.DataFrame:
     """
     For every bear-market cycle (drawdown > threshold from ATH), compute:
       - start_date        : date of the preceding all-time-high peak
@@ -117,16 +119,63 @@ def build_downturn_catalog(df: pd.DataFrame,
     The trough window is the actual drawdown period (peak → next ATH recovery),
     so no arbitrary month cap is needed.
     """
-    def _indicator_lag(series: pd.Series, start: pd.Timestamp, direction: str):
-        # First month after start where the indicator moves in the given direction vs start value
-        at_start = series[series.index <= start].iloc[-1] if not series[series.index <= start].empty else None
-        if at_start is None or pd.isna(at_start):
+    def _indicator_lag(series: pd.Series, start: pd.Timestamp, direction: str,
+                       threshold: float, mom_noise_pct: float = None):
+        # "up"   (unemployment, in pp): threshold = absolute pp rise from running trough
+        # "down" (tax, in %):           threshold = relative % cumulative drop from running peak
+        after = series[series.index > start].dropna()
+        if after.empty:
             return None
-        for date, val in series[series.index > start].items():
-            if direction == "up"   and val > at_start:
-                return (date.year - start.year) * 12 + (date.month - start.month)
-            if direction == "down" and val < at_start:
-                return (date.year - start.year) * 12 + (date.month - start.month)
+        if direction == "up":
+            for i in range(1, len(after)):
+                window = after.iloc[:i]
+                prev_min = window.min()
+                if after.iloc[i] - prev_min >= threshold:   # absolute pp
+                    # Last month at the trough (not first) — same as S&P uses last ATH month
+                    turn_date = window[window == prev_min].index[-1]
+                    lag = (turn_date.year - start.year) * 12 + (turn_date.month - start.month)
+                    return lag if lag <= MAX_LAG else None
+        else:
+            # Find confirmation trigger: cumul >= threshold AND mom >= mom_noise_pct.
+            # Trigger must fall within MAX_LAG months to exclude false positives
+            # where a later-cycle peak happens to cross the threshold years later.
+            trigger_i = None
+            for i in range(1, len(after)):
+                trigger_lag = (after.index[i].year - start.year) * 12 + (after.index[i].month - start.month)
+                if trigger_lag > MAX_LAG:
+                    break
+                window   = after.iloc[:i]
+                prev_max = window.max()
+                if prev_max <= 0:
+                    continue
+                if (prev_max - after.iloc[i]) / prev_max * 100 >= threshold:
+                    if mom_noise_pct is not None:
+                        prev_val = after.iloc[i - 1]
+                        mom_drop = (prev_val - after.iloc[i]) / prev_val * 100 if prev_val > 0 else 0
+                        if mom_drop < mom_noise_pct:
+                            continue
+                    trigger_i = i
+                    break
+
+            if trigger_i is None:
+                return None
+
+            # Scan BACKWARD from the trigger to find the beginning of the decline.
+            # Keep updating first_i for every month with mom >= mom_noise_pct,
+            # so we end up at the EARLIEST real drop in the window.
+            first_i = trigger_i
+            if mom_noise_pct is not None:
+                for j in range(trigger_i, 0, -1):
+                    prev_val = after.iloc[j - 1]
+                    if prev_val <= 0:
+                        continue
+                    mom_drop = (prev_val - after.iloc[j]) / prev_val * 100
+                    if mom_drop >= mom_noise_pct:
+                        first_i = j
+
+            turn_date = after.index[first_i - 1]
+            lag = (turn_date.year - start.year) * 12 + (turn_date.month - start.month)
+            return lag if lag <= MAX_LAG else None
         return None
 
     close = df["close"].dropna()
@@ -178,8 +227,8 @@ def build_downturn_catalog(df: pd.DataFrame,
             "trough_close":     round(trough_close, 2),
             "pct_drop":         round(pct_drop, 2),
             "duration_months":  duration,
-            "unemp_lag_months": _indicator_lag(df["unemployment_rate"], catalog_start, "up"),
-            "tax_lag_months":   _indicator_lag(df["receipts_bn"],       catalog_start, "down"),
+            "unemp_lag_months": _indicator_lag(df["unemployment_rate"], catalog_start, "up",   UNEMPLOYMENT_THRESHOLD),
+            "tax_lag_months":   _indicator_lag(df["receipts_bn"],       catalog_start, "down", FED_TAX_THRESHOLD, mom_noise_pct=0.5),
         })
 
     # Always include named events even if their drawdown didn't reach the threshold
@@ -206,8 +255,8 @@ def build_downturn_catalog(df: pd.DataFrame,
             "trough_close":     round(trough_close, 2),
             "pct_drop":         round(pct_drop, 2),
             "duration_months":  duration,
-            "unemp_lag_months": _indicator_lag(df["unemployment_rate"], named_start, "up"),
-            "tax_lag_months":   _indicator_lag(df["receipts_bn"],       named_start, "down"),
+            "unemp_lag_months": _indicator_lag(df["unemployment_rate"], named_start, "up",   UNEMPLOYMENT_THRESHOLD),
+            "tax_lag_months":   _indicator_lag(df["receipts_bn"],       named_start, "down", FED_TAX_THRESHOLD, mom_noise_pct=0.5),
         })
 
     catalog = pd.DataFrame(rows).sort_values("pct_drop")
@@ -357,22 +406,46 @@ def run_named_event_study(df: pd.DataFrame) -> pd.DataFrame:
 # ── summary print ─────────────────────────────────────────────────────────────
 
 def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
-    peak_u = agg.loc[agg["avg_unemp_change"].idxmax(), "lag"]
-    peak_t = agg.loc[agg["avg_tax_change"].abs().idxmax(), "lag"]
-
     print("\n" + "=" * 60)
-    print("LAG ANALYSIS RESULTS")
+    print("RESEARCH QUESTION ANSWER")
+    print("How long after a U.S. stock market downturn do unemployment")
+    print("and federal tax revenues change?")
     print("=" * 60)
-    print(f"\nEvent study — peak unemployment change : lag {peak_u} months")
-    print(f"Event study — peak tax receipt change  : lag {peak_t} months")
 
-    print("\nEvent study aggregated (avg change from pre-downturn baseline):")
+    # Primary: event study — conditional on the 9 identified downturns
+    print("\n── PRIMARY: Event Study (conditional on identified downturns) ──")
+    peak_u  = agg.loc[agg["avg_unemp_change"].idxmax(), "lag"]
+    # First lag where avg_unemp_change turns positive
+    pos_u   = agg[agg["avg_unemp_change"] > 0].iloc[0]["lag"] if not agg[agg["avg_unemp_change"] > 0].empty else None
+    sig_u   = agg[agg["p_unemp"] < 0.05]
+    print(f"  Unemployment first rises   : lag {int(pos_u)} months after downturn start")
+    print(f"  Unemployment peaks on avg  : lag {int(peak_u)} months")
+    if sig_u.empty:
+        print(f"  Statistical significance   : no lag reaches p<0.05 (only {len(agg['n_events'].unique())} events)")
+    else:
+        print(f"  Significant lags (p<0.05)  : {sig_u['lag'].tolist()}")
+
+    # Tax: find first lag where avg_tax_change is negative (i.e., receipts fall below baseline)
+    neg_t   = agg[agg["avg_tax_change"] < 0]
+    if not neg_t.empty:
+        print(f"  Tax receipts first fall    : lag {int(neg_t.iloc[0]['lag'])} months")
+    else:
+        print(f"  Tax receipts               : avg stays above pre-event baseline across all lags")
+        print(f"                               (long-term upward trend dominates; see per-event catalog)")
+
+    print("\n  Aggregated changes by lag:")
     print(agg[["lag", "avg_unemp_change", "avg_tax_change", "p_unemp", "p_tax"]].to_string(index=False))
 
+    # Supporting: cross-correlation — full dataset, NOT event-conditional
+    print("\n── SUPPORTING: Cross-Correlation (all months, not event-conditional) ──")
+    print("  Note: uses the full time series (~900 months), not just the 9 downturn events.")
+    print("  Signal is diluted by normal (non-downturn) months.")
     peak_xu = xcorr.loc[xcorr["r_unemp"].abs().idxmax(), "lag"]
     peak_xt = xcorr.loc[xcorr["r_tax"].abs().idxmax(), "lag"]
-    print(f"\nCross-correlation — strongest unemp correlation : lag {peak_xu} months  (r={xcorr.loc[xcorr['lag']==peak_xu,'r_unemp'].values[0]})")
-    print(f"Cross-correlation — strongest tax correlation   : lag {peak_xt} months  (r={xcorr.loc[xcorr['lag']==peak_xt,'r_tax'].values[0]})")
+    r_xu    = xcorr.loc[xcorr["lag"] == peak_xu, "r_unemp"].values[0]
+    r_xt    = xcorr.loc[xcorr["lag"] == peak_xt, "r_tax"].values[0]
+    print(f"  Strongest unemp correlation : lag {peak_xu} months  (r={r_xu})")
+    print(f"  Strongest tax correlation   : lag {peak_xt} months  (r={r_xt})")
     print("=" * 60 + "\n")
 
 
@@ -384,7 +457,7 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     print(f"  {len(df)} rows  ({df.index.min().date()} → {df.index.max().date()})")
 
     events = detect_sp500_downturns(df)
-    print(f"  Detected {len(events)} bear-market events (drawdown threshold {DRAWDOWN_THRESHOLD}%):")
+    print(f"  Detected {len(events)} bear-market events (drawdown threshold {SP500_THRESHOLD}%):")
     for label, start in sorted(events.items(), key=lambda x: x[1]):
         print(f"    {label}  →  start {start.date()}")
 
