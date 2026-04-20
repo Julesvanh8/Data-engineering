@@ -21,11 +21,11 @@ RAW         = ROOT / "data" / "raw"
 
 MAIN_CSV        = PROCESSED / "merged_monthly_vs.csv"
 LAG_CSV         = PROCESSED / "lag_results.csv"
-RAW_EVENT_CSV   = PROCESSED / "event_study_raw.csv"
-NAMED_EVENT_CSV = PROCESSED / "named_event_lags.csv"
+EVENTS_CSV      = PROCESSED / "events_combined.csv"
 TAX_SOURCES_CSV = PROCESSED / "tax_sources.csv"
 FRED_UNRATE_CSV = RAW / "fred_unrate.csv"
-CATALOG_CSV     = PROCESSED / "downturn_catalog.csv"
+
+NAMED_EVENT_NAMES = {"Dot-com crash", "Global Financial Crisis", "COVID crash"}
 
 NAMED_COLORS = {
     "Dot-com crash":           "rgba(255, 180, 180, 0.35)",
@@ -51,11 +51,16 @@ def load_lags() -> pd.DataFrame:
 
 @st.cache_data
 def load_raw_events() -> pd.DataFrame:
-    return pd.read_csv(RAW_EVENT_CSV)
+    if not EVENTS_CSV.exists():
+        return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
+    return pd.read_csv(EVENTS_CSV)
 
 @st.cache_data
 def load_named_events() -> pd.DataFrame:
-    return pd.read_csv(NAMED_EVENT_CSV)
+    if not EVENTS_CSV.exists():
+        return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
+    df = pd.read_csv(EVENTS_CSV)
+    return df[df["name"].isin(NAMED_EVENT_NAMES)]
 
 @st.cache_data
 def load_tax_sources() -> pd.DataFrame:
@@ -71,9 +76,13 @@ def load_fred_unrate() -> pd.Series:
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
-    if not CATALOG_CSV.exists():
-        return pd.DataFrame(columns=["name", "start_date", "trough_date", "pct_drop", "duration_months"])
-    return pd.read_csv(CATALOG_CSV, parse_dates=["start_date", "trough_date"])
+    if not EVENTS_CSV.exists():
+        return pd.DataFrame(columns=["name", "start_date", "trough_date", "pct_drop"])
+    df = pd.read_csv(EVENTS_CSV, parse_dates=["start_date", "trough_date"])
+    for col in ("unemp_lag_months", "tax_lag_months", "duration_trough_unemp", "duration_trough_tax"):
+        if col in df.columns:
+            df[col] = df[col].astype("Int64")
+    return df.drop_duplicates(subset=["name"]).reset_index(drop=True)
 
 
 # ── downturn shading helper ───────────────────────────────────────────────────
@@ -213,8 +222,8 @@ def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) 
 
     def _study_fig(col, color, ylabel, title):
         fig = go.Figure()
-        for event in raw["event"].unique():
-            sub = raw[raw["event"] == event].set_index("lag").reindex(lags_x)
+        for event in raw["name"].unique():
+            sub = raw[raw["name"] == event].set_index("lag").reindex(lags_x)
             fig.add_trace(go.Scatter(
                 x=lags_x, y=sub[col], mode="lines",
                 line=dict(color="gray", width=0.7), opacity=0.3, showlegend=False,
@@ -245,7 +254,7 @@ def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) 
 
     with col_right:
         st.plotly_chart(
-            _study_fig("tax_change", "#2ca02c", "bn $ change vs baseline",
+            _study_fig("tax_change", "#2ca02c", "% change vs baseline",
                        "Federal tax receipts change after downturn"),
             width="stretch",
         )
@@ -278,14 +287,14 @@ def page_event_study(raw: pd.DataFrame):
     indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True)
     col_map = {"Unemployment": "unemp_change", "Tax receipts": "tax_change"}
     col = col_map[indicator]
-    ylabel = "pp change" if indicator == "Unemployment" else "bn $ change"
+    ylabel = "pp change" if indicator == "Unemployment" else "% change vs baseline"
 
     lags   = sorted(raw["lag"].unique())
-    events = raw["event"].unique()
+    events = raw["name"].unique()
 
     fig = go.Figure()
     for event in events:
-        sub = raw[raw["event"] == event].set_index("lag").reindex(lags)
+        sub = raw[raw["name"] == event].set_index("lag").reindex(lags)
         fig.add_trace(go.Scatter(
             x=lags, y=sub[col], mode="lines",
             line=dict(color="gray", width=0.7),
@@ -318,16 +327,16 @@ def page_named_events(named: pd.DataFrame):
 
     indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True, key="ne_ind")
     col = "unemp_change" if indicator == "Unemployment" else "tax_change"
-    ylabel = "pp change" if indicator == "Unemployment" else "bn $ change"
+    ylabel = "pp change" if indicator == "Unemployment" else "% change vs baseline"
 
     lags = sorted(named["lag"].unique())
     fig = go.Figure()
 
-    events = sorted(named["event"].unique(),
-                    key=lambda e: named[named["event"] == e]["lag"].count(), reverse=True)
+    events = sorted(named["name"].unique(),
+                    key=lambda e: named[named["name"] == e]["lag"].count(), reverse=True)
     for i, event in enumerate(events):
         color = PALETTE[i % len(PALETTE)]
-        sub = named[named["event"] == event].set_index("lag").reindex(lags)
+        sub = named[named["name"] == event].set_index("lag").reindex(lags)
         if sub[col].notna().any():
             fig.add_trace(go.Scatter(
                 x=lags, y=sub[col], mode="lines+markers",
@@ -436,17 +445,29 @@ def page_catalog(catalog: pd.DataFrame):
         return
 
     cols = ["name", "start_date", "trough_date", "peak_close", "trough_close",
-            "pct_drop", "duration_months", "unemp_lag_months", "tax_lag_months"]
+            "pct_drop", "duration_trough_sp500",
+            "unemp_lag_months", "unemp_rise_pp", "duration_trough_unemp",
+            "tax_lag_months",   "tax_drop_pct",  "duration_trough_tax"]
     display = catalog[[c for c in cols if c in catalog.columns]].copy()
     display.columns = [{"name": "Event", "start_date": "Start", "trough_date": "Trough",
                         "peak_close": "S&P at Start", "trough_close": "S&P at Trough",
-                        "pct_drop": "Drop (%)", "duration_months": "Months to Trough",
-                        "unemp_lag_months": "Unemp rise starts (month)",
-                        "tax_lag_months":   "Tax drop starts (month)"}[c]
+                        "pct_drop": "Drop (%)",
+                        "duration_trough_sp500":  "S&P trough (m)",
+                        "unemp_lag_months":        "Unemp rise starts (m)",
+                        "unemp_rise_pp":           "Unemp rise (pp)",
+                        "duration_trough_unemp":   "Unemp peaks (m)",
+                        "tax_lag_months":           "Tax drop starts (m)",
+                        "tax_drop_pct":             "Tax drop (%)",
+                        "duration_trough_tax":      "Tax troughs (m)"}[c]
                        for c in cols if c in catalog.columns]
     display = display.sort_values("Drop (%)")
+    for col in ("Start", "Trough"):
+        if col in display.columns:
+            display[col] = pd.to_datetime(display[col]).dt.strftime("%Y-%m")
 
-    fmt = {"Drop (%)": "{:.1f}", "S&P at Start": "{:.0f}", "S&P at Trough": "{:.0f}"}
+    fmt = {"Drop (%)": "{:.1f}", "S&P at Start": "{:.0f}", "S&P at Trough": "{:.0f}",
+           "Unemp rise starts (m)": "{:.0f}", "Unemp rise (pp)": "{:.1f}", "Unemp peaks (m)": "{:.0f}",
+           "Tax drop starts (m)":   "{:.0f}", "Tax drop (%)":    "{:.1f}", "Tax troughs (m)":  "{:.0f}"}
     st.dataframe(
         display.style.format(fmt, na_rep="—")
             .background_gradient(subset=["Drop (%)"], cmap="RdYlGn"),
