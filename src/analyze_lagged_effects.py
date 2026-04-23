@@ -1,13 +1,13 @@
 """
-Analyse Script: Lagged Effects van Stock Market Downturns
-Onderzoeksvraag: How long after a U.S. stock market downturn do unemployment 
-                 and federal income tax revenues change?
+Analysis Script: Lagged Effects of Stock Market Downturns
+Research Question: How long after a U.S. stock market downturn do unemployment 
+                   and federal income tax revenues change?
 
-Dit script analyseert:
-1. Veranderingen in werkloosheid na downturns
-2. Veranderingen in belastingopbrengsten na downturns
-3. Bij welke lag (1-12 maanden) de effecten het sterkst zijn
-4. Statistische significantie van de effecten
+This script analyzes:
+1. Changes in unemployment after downturns
+2. Changes in tax revenues after downturns
+3. At which lag (1-12 months) the effects are strongest
+4. Statistical significance of the effects
 """
 
 from pathlib import Path
@@ -19,14 +19,14 @@ from scipy import stats
 
 
 def set_plot_style():
-    """Stel plot style in."""
+    """Set plot style."""
     plt.style.use('seaborn-v0_8-darkgrid')
     plt.rcParams['figure.figsize'] = (14, 8)
     plt.rcParams['font.size'] = 10
 
 
 def load_data(project_root: Path) -> pd.DataFrame:
-    """Laad de combined dataset."""
+    """Load the combined dataset."""
     processed_dir = project_root / "data" / "processed"
     df = pd.read_csv(processed_dir / "combined_full_dataset.csv", 
                      index_col='date', parse_dates=True)
@@ -34,14 +34,14 @@ def load_data(project_root: Path) -> pd.DataFrame:
 
 
 def calculate_changes(df: pd.DataFrame) -> pd.DataFrame:
-    """Bereken veranderingen in werkloosheid en belastingopbrengsten."""
+    """Calculate changes in unemployment and tax revenues."""
     df = df.copy()
     
-    # Absolute veranderingen
+    # Absolute changes
     df['unemployment_change'] = df['unemployment_rate'].diff()
     df['tax_change'] = df['federal_income_tax_revenue'].diff()
     
-    # Percentage veranderingen
+    # Percentage changes
     df['unemployment_pct_change'] = df['unemployment_rate'].pct_change() * 100
     df['tax_pct_change'] = df['federal_income_tax_revenue'].pct_change() * 100
     
@@ -50,23 +50,23 @@ def calculate_changes(df: pd.DataFrame) -> pd.DataFrame:
 
 def analyze_lag_correlations(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Analyseer correlatie tussen downturn lags en veranderingen in 
-    werkloosheid en belastingopbrengsten.
+    Analyze correlation between downturn lags and changes in 
+    unemployment and tax revenues.
     """
     results = []
     
     for lag in range(1, 13):
         lag_col = f'downturn_lag_{lag}m'
         
-        # Correlaties met werkloosheid
+        # Correlations with unemployment
         corr_unemp_abs = df[lag_col].corr(df['unemployment_change'])
         corr_unemp_pct = df[lag_col].corr(df['unemployment_pct_change'])
         
-        # Correlaties met belastingen
+        # Correlations with taxes
         corr_tax_abs = df[lag_col].corr(df['tax_change'])
         corr_tax_pct = df[lag_col].corr(df['tax_pct_change'])
         
-        # Gemiddelde verandering wanneer downturn_lag = 1
+        # Average change when downturn_lag = 1
         downturn_mask = df[lag_col] == 1
         if downturn_mask.sum() > 0:
             avg_unemp_change = df.loc[downturn_mask, 'unemployment_change'].mean()
@@ -105,13 +105,13 @@ def perform_statistical_tests(df: pd.DataFrame) -> dict:
         with_downturn = df[df[lag_col] == 1]['unemployment_change'].dropna()
         without_downturn = df[df[lag_col] == 0]['unemployment_change'].dropna()
         
-        # T-test voor werkloosheid
+        # T-test for unemployment
         if len(with_downturn) > 1 and len(without_downturn) > 1:
             t_stat_unemp, p_val_unemp = stats.ttest_ind(with_downturn, without_downturn)
         else:
             t_stat_unemp, p_val_unemp = np.nan, np.nan
         
-        # T-test voor belastingen
+        # T-test for taxes
         with_downturn_tax = df[df[lag_col] == 1]['tax_change'].dropna()
         without_downturn_tax = df[df[lag_col] == 0]['tax_change'].dropna()
         
@@ -131,86 +131,86 @@ def perform_statistical_tests(df: pd.DataFrame) -> dict:
 
 
 def plot_correlation_analysis(corr_results: pd.DataFrame, output_dir: Path):
-    """Plot correlaties tussen lags en veranderingen."""
+    """Plot correlations between lags and changes."""
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle('Correlatie Analyse: Downturn Lags vs Veranderingen', 
+    fig.suptitle('Correlation Analysis: Downturn Lags vs Changes', 
                  fontsize=16, fontweight='bold', y=0.995)
     
     lags = corr_results['lag_months']
     
-    # Plot 1: Correlatie met werkloosheid verandering
+    # Plot 1: Correlation with unemployment change
     axes[0, 0].bar(lags, corr_results['corr_unemployment_abs'], 
                    color='darkred', alpha=0.7, edgecolor='black')
     axes[0, 0].axhline(y=0, color='black', linestyle='-', linewidth=0.5)
-    axes[0, 0].set_xlabel('Maanden na Downturn', fontweight='bold')
-    axes[0, 0].set_ylabel('Correlatie Coëfficiënt', fontweight='bold')
-    axes[0, 0].set_title('Correlatie: Downturn Lag → Werkloosheid Verandering (abs)')
+    axes[0, 0].set_xlabel('Months After Downturn', fontweight='bold')
+    axes[0, 0].set_ylabel('Correlation Coefficient', fontweight='bold')
+    axes[0, 0].set_title('Correlation: Downturn Lag → Unemployment Change (abs)')
     axes[0, 0].grid(True, alpha=0.3, axis='y')
     axes[0, 0].set_xticks(lags)
     
-    # Plot 2: Correlatie met belastingen verandering
+    # Plot 2: Correlation with tax change
     axes[0, 1].bar(lags, corr_results['corr_tax_abs'], 
                    color='darkgreen', alpha=0.7, edgecolor='black')
     axes[0, 1].axhline(y=0, color='black', linestyle='-', linewidth=0.5)
-    axes[0, 1].set_xlabel('Maanden na Downturn', fontweight='bold')
-    axes[0, 1].set_ylabel('Correlatie Coëfficiënt', fontweight='bold')
-    axes[0, 1].set_title('Correlatie: Downturn Lag → Belastingopbrengsten Verandering (abs)')
+    axes[0, 1].set_xlabel('Months After Downturn', fontweight='bold')
+    axes[0, 1].set_ylabel('Correlation Coefficient', fontweight='bold')
+    axes[0, 1].set_title('Correlation: Downturn Lag → Tax Revenue Change (abs)')
     axes[0, 1].grid(True, alpha=0.3, axis='y')
     axes[0, 1].set_xticks(lags)
     
-    # Plot 3: Gemiddelde werkloosheid verandering
+    # Plot 3: Average unemployment change
     axes[1, 0].plot(lags, corr_results['avg_unemployment_change'], 
-                    marker='o', linewidth=2, markersize=8, color='darkred', label='Abs. verandering')
+                    marker='o', linewidth=2, markersize=8, color='darkred', label='Abs. change')
     axes[1, 0].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-    axes[1, 0].set_xlabel('Maanden na Downturn', fontweight='bold')
-    axes[1, 0].set_ylabel('Gem. Verandering Werkloosheid (%-punt)', fontweight='bold')
-    axes[1, 0].set_title('Gemiddelde Werkloosheid Verandering na Downturn')
+    axes[1, 0].set_xlabel('Months After Downturn', fontweight='bold')
+    axes[1, 0].set_ylabel('Avg. Unemployment Change (%-point)', fontweight='bold')
+    axes[1, 0].set_title('Average Unemployment Change After Downturn')
     axes[1, 0].grid(True, alpha=0.3)
     axes[1, 0].set_xticks(lags)
     axes[1, 0].legend()
     
-    # Plot 4: Gemiddelde belasting verandering
+    # Plot 4: Average tax change
     axes[1, 1].plot(lags, corr_results['avg_tax_change'], 
-                    marker='o', linewidth=2, markersize=8, color='darkgreen', label='Abs. verandering')
+                    marker='o', linewidth=2, markersize=8, color='darkgreen', label='Abs. change')
     axes[1, 1].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-    axes[1, 1].set_xlabel('Maanden na Downturn', fontweight='bold')
-    axes[1, 1].set_ylabel('Gem. Verandering Belastingen (mld $)', fontweight='bold')
-    axes[1, 1].set_title('Gemiddelde Belastingopbrengsten Verandering na Downturn')
+    axes[1, 1].set_xlabel('Months After Downturn', fontweight='bold')
+    axes[1, 1].set_ylabel('Avg. Tax Revenue Change (billion $)', fontweight='bold')
+    axes[1, 1].set_title('Average Tax Revenue Change After Downturn')
     axes[1, 1].grid(True, alpha=0.3)
     axes[1, 1].set_xticks(lags)
     axes[1, 1].legend()
     
     plt.tight_layout()
     plt.savefig(output_dir / 'lagged_effects_correlation.png', dpi=300, bbox_inches='tight')
-    print(f"✅ Opgeslagen: lagged_effects_correlation.png")
+    print(f"✅ Saved: lagged_effects_correlation.png")
     plt.close()
 
 
 def plot_heatmap_analysis(corr_results: pd.DataFrame, output_dir: Path):
-    """Maak een heatmap van de correlaties."""
+    """Create a heatmap of the correlations."""
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Prepare data for heatmap
     data = corr_results[['lag_months', 'corr_unemployment_abs', 'corr_tax_abs']].set_index('lag_months').T
     
     sns.heatmap(data, annot=True, fmt='.3f', cmap='RdYlGn', center=0,
-                cbar_kws={'label': 'Correlatie Coëfficiënt'},
+                cbar_kws={'label': 'Correlation Coefficient'},
                 linewidths=1, linecolor='black', ax=ax)
     
-    ax.set_xlabel('Maanden na Downturn', fontweight='bold')
-    ax.set_ylabel('Variabele', fontweight='bold')
-    ax.set_yticklabels(['Werkloosheid', 'Belastingopbrengsten'], rotation=0)
-    ax.set_title('Heatmap: Correlatie tussen Downturn Lags en Veranderingen',
+    ax.set_xlabel('Months After Downturn', fontweight='bold')
+    ax.set_ylabel('Variable', fontweight='bold')
+    ax.set_yticklabels(['Unemployment', 'Tax Revenue'], rotation=0)
+    ax.set_title('Heatmap: Correlation Between Downturn Lags and Changes',
                  fontsize=14, fontweight='bold', pad=20)
     
     plt.tight_layout()
     plt.savefig(output_dir / 'lagged_effects_heatmap.png', dpi=300, bbox_inches='tight')
-    print(f"✅ Opgeslagen: lagged_effects_heatmap.png")
+    print(f"✅ Saved: lagged_effects_heatmap.png")
     plt.close()
 
 
 def create_results_summary(corr_results: pd.DataFrame, stat_tests: dict, output_dir: Path):
-    """Maak een samenvatting van de resultaten."""
+    """Create a summary of the results."""
     
     # Find peak lags
     peak_unemp_lag = corr_results.loc[corr_results['avg_unemployment_change'].idxmax(), 'lag_months']
@@ -221,31 +221,31 @@ def create_results_summary(corr_results: pd.DataFrame, stat_tests: dict, output_
     
     summary = f"""
 {'=' * 80}
-RESULTATEN: LAGGED EFFECTS ANALYSE
+RESULTS: LAGGED EFFECTS ANALYSIS
 {'=' * 80}
 
-ONDERZOEKSVRAAG:
+RESEARCH QUESTION:
 How long after a U.S. stock market downturn do unemployment and federal 
 income tax revenues change?
 
 {'=' * 80}
-BELANGRIJKSTE BEVINDINGEN:
+KEY FINDINGS:
 {'=' * 80}
 
-1. WERKLOOSHEID:
-   - Sterkste gemiddelde stijging: {peak_unemp_lag} maanden na downturn
-   - Gemiddelde verandering op dat moment: {corr_results.loc[corr_results['lag_months'] == peak_unemp_lag, 'avg_unemployment_change'].values[0]:.3f} %-punt
-   - Sterkste correlatie bij: {peak_unemp_corr_lag} maanden
-   - Correlatie waarde: {corr_results.loc[corr_results['lag_months'] == peak_unemp_corr_lag, 'corr_unemployment_abs'].values[0]:.3f}
+1. UNEMPLOYMENT:
+   - Strongest average increase: {peak_unemp_lag} months after downturn
+   - Average change at that time: {corr_results.loc[corr_results['lag_months'] == peak_unemp_lag, 'avg_unemployment_change'].values[0]:.3f} %-points
+   - Strongest correlation at: {peak_unemp_corr_lag} months
+   - Correlation value: {corr_results.loc[corr_results['lag_months'] == peak_unemp_corr_lag, 'corr_unemployment_abs'].values[0]:.3f}
 
-2. BELASTINGOPBRENGSTEN:
-   - Sterkste gemiddelde verandering: {peak_tax_lag} maanden na downturn
-   - Gemiddelde verandering op dat moment: {corr_results.loc[corr_results['lag_months'] == peak_tax_lag, 'avg_tax_change'].values[0]:.2f} miljard $
-   - Sterkste correlatie bij: {peak_tax_corr_lag} maanden
-   - Correlatie waarde: {corr_results.loc[corr_results['lag_months'] == peak_tax_corr_lag, 'corr_tax_abs'].values[0]:.3f}
+2. TAX REVENUE:
+   - Strongest average change: {peak_tax_lag} months after downturn
+   - Average change at that time: {corr_results.loc[corr_results['lag_months'] == peak_tax_lag, 'avg_tax_change'].values[0]:.2f} billion $
+   - Strongest correlation at: {peak_tax_corr_lag} months
+   - Correlation value: {corr_results.loc[corr_results['lag_months'] == peak_tax_corr_lag, 'corr_tax_abs'].values[0]:.3f}
 
 {'=' * 80}
-CORRELATIE TABEL (per lag):
+CORRELATION TABLE (per lag):
 {'=' * 80}
 
 """
@@ -257,10 +257,10 @@ CORRELATIE TABEL (per lag):
     # Add statistical significance
     summary += f"""
 {'=' * 80}
-STATISTISCHE SIGNIFICANTIE (p-values < 0.05 zijn significant):
+STATISTICAL SIGNIFICANCE (p-values < 0.05 are significant):
 {'=' * 80}
 
-Lag | Werkloosheid p-value | Belastingen p-value | Significant?
+Lag | Unemployment p-value | Tax Revenue p-value | Significant?
 ----|---------------------|---------------------|-------------
 """
     
@@ -273,16 +273,16 @@ Lag | Werkloosheid p-value | Belastingen p-value | Significant?
     
     summary += f"""
 {'=' * 80}
-CONCLUSIE:
+CONCLUSION:
 {'=' * 80}
 
-Na een stock market downturn (≥5% maandelijkse daling):
+After a stock market downturn (≥5% monthly decline):
 
-• WERKLOOSHEID stijgt het meest na ongeveer {peak_unemp_lag} maanden
-• BELASTINGOPBRENGSTEN veranderen het meest na ongeveer {peak_tax_lag} maanden
+• UNEMPLOYMENT increases most after approximately {peak_unemp_lag} months
+• TAX REVENUE changes most after approximately {peak_tax_lag} months
 
-Dit suggereert een vertraagd effect waarbij economische indicatoren
-pas enkele maanden na een marktcrash significant veranderen.
+This suggests a delayed effect where economic indicators
+only change significantly several months after a market crash.
 
 {'=' * 80}
 """
@@ -292,15 +292,15 @@ pas enkele maanden na een marktcrash significant veranderen.
         f.write(summary)
     
     print(summary)
-    print(f"✅ Opgeslagen: analysis_results.txt")
+    print(f"✅ Saved: analysis_results.txt")
     
     # Also save as CSV
     corr_results.to_csv(output_dir / 'correlation_results.csv', index=False)
-    print(f"✅ Opgeslagen: correlation_results.csv")
+    print(f"✅ Saved: correlation_results.csv")
 
 
 def main():
-    """Hoofdfunctie."""
+    """Main function."""
     project_root = Path(__file__).resolve().parents[1]
     output_dir = project_root / "outputs" / "figures"
     tables_dir = project_root / "outputs" / "tables"
@@ -308,49 +308,49 @@ def main():
     tables_dir.mkdir(parents=True, exist_ok=True)
     
     print("=" * 80)
-    print("LAGGED EFFECTS ANALYSE")
+    print("LAGGED EFFECTS ANALYSIS")
     print("=" * 80)
     print()
     
     set_plot_style()
     
-    print("📊 Data laden...")
+    print("📊 Loading data...")
     df = load_data(project_root)
-    print(f"   Geladen: {len(df)} observaties")
+    print(f"   Loaded: {len(df)} observations")
     print()
     
-    print("📈 Veranderingen berekenen...")
+    print("📈 Calculating changes...")
     df = calculate_changes(df)
-    print("   ✅ Unemployment changes berekend")
-    print("   ✅ Tax revenue changes berekend")
+    print("   ✅ Unemployment changes calculated")
+    print("   ✅ Tax revenue changes calculated")
     print()
     
-    print("🔍 Correlatie analyse uitvoeren...")
+    print("🔍 Performing correlation analysis...")
     corr_results = analyze_lag_correlations(df)
-    print("   ✅ Correlaties berekend voor alle lags (1-12 maanden)")
+    print("   ✅ Correlations calculated for all lags (1-12 months)")
     print()
     
-    print("📊 Statistische tests uitvoeren...")
+    print("📊 Performing statistical tests...")
     stat_tests = perform_statistical_tests(df)
-    print("   ✅ T-tests uitgevoerd")
+    print("   ✅ T-tests completed")
     print()
     
-    print("📉 Visualisaties maken...")
+    print("📉 Creating visualizations...")
     plot_correlation_analysis(corr_results, output_dir)
     plot_heatmap_analysis(corr_results, output_dir)
     print()
     
-    print("📝 Resultaten samenvatten...")
+    print("📝 Summarizing results...")
     create_results_summary(corr_results, stat_tests, tables_dir)
     print()
     
     print("=" * 80)
-    print("✅ ANALYSE VOLTOOID!")
+    print("✅ ANALYSIS COMPLETE!")
     print("=" * 80)
     print()
     print("📁 Outputs:")
-    print(f"   - Figuren: {output_dir}/")
-    print(f"   - Tabellen: {tables_dir}/")
+    print(f"   - Figures: {output_dir}/")
+    print(f"   - Tables: {tables_dir}/")
 
 
 if __name__ == "__main__":

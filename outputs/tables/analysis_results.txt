@@ -1,0 +1,76 @@
+
+================================================================================
+RESULTS: LAGGED EFFECTS ANALYSIS
+================================================================================
+
+RESEARCH QUESTION:
+How long after a U.S. stock market downturn do unemployment and federal 
+income tax revenues change?
+
+================================================================================
+KEY FINDINGS:
+================================================================================
+
+1. UNEMPLOYMENT:
+   - Strongest average increase: 1 months after downturn
+   - Average change at that time: 0.311 %-points
+   - Strongest correlation at: 1 months
+   - Correlation value: 0.185
+
+2. TAX REVENUE:
+   - Strongest average change: 4 months after downturn
+   - Average change at that time: -10.65 billion $
+   - Strongest correlation at: 4 months
+   - Correlation value: -0.120
+
+================================================================================
+CORRELATION TABLE (per lag):
+================================================================================
+
+ lag_months  corr_unemployment_abs  corr_unemployment_pct  corr_tax_abs  corr_tax_pct  avg_unemployment_change  avg_tax_change  avg_unemployment_pct_change  avg_tax_pct_change
+          1               0.184760               0.174528     -0.045651     -0.087124                 0.311321       -1.632132                     6.379046           -0.387844
+          2               0.036952               0.029388     -0.057634     -0.065948                 0.062264       -3.083604                     1.243613           -0.161744
+          3               0.048839               0.043039     -0.051400     -0.070633                 0.081481       -2.266963                     1.711573           -0.204312
+          4               0.068305               0.047422     -0.120127     -0.146606                 0.115094      -10.653585                     1.881686           -1.022948
+          5               0.032765               0.029687     -0.044172     -0.061659                 0.055769       -1.507308                     1.264845           -0.122624
+          6               0.055361               0.028794     -0.069448     -0.070623                 0.094231       -4.600077                     1.232950           -0.219313
+          7               0.031635               0.023704      0.013381      0.032243                 0.053846        5.535154                     1.051003            0.890166
+          8               0.050842               0.034218     -0.030601      0.003300                 0.086538        0.153308                     1.426800            0.578001
+          9               0.032765               0.018270     -0.080870     -0.125821                 0.055769       -5.997788                     0.856802           -0.814657
+         10               0.014688               0.002286      0.015510      0.057936                 0.025000        5.795577                     0.285498            1.167285
+         11               0.035024               0.020663      0.005135      0.015884                 0.059615        4.526115                     0.942330            0.713726
+         12              -0.002260              -0.003854     -0.060044     -0.040158                -0.003846       -3.449365                     0.066049            0.109269
+
+
+================================================================================
+STATISTICAL SIGNIFICANCE (p-values < 0.05 are significant):
+================================================================================
+
+Lag | Unemployment p-value | Tax Revenue p-value | Significant?
+----|---------------------|---------------------|-------------
+  1 |              0.0000 |              0.1670 | Unemp:✓ Tax:✗
+  2 |              0.2634 |              0.0809 | Unemp:✗ Tax:✗
+  3 |              0.1392 |              0.1197 | Unemp:✗ Tax:✗
+  4 |              0.0385 |              0.0003 | Unemp:✓ Tax:✓
+  5 |              0.3214 |              0.1812 | Unemp:✗ Tax:✗
+  6 |              0.0937 |              0.0354 | Unemp:✗ Tax:✓
+  7 |              0.3384 |              0.6855 | Unemp:✗ Tax:✗
+  8 |              0.1237 |              0.3544 | Unemp:✗ Tax:✗
+  9 |              0.3214 |              0.0142 | Unemp:✗ Tax:✓
+ 10 |              0.6567 |              0.6388 | Unemp:✗ Tax:✗
+ 11 |              0.2891 |              0.8765 | Unemp:✗ Tax:✗
+ 12 |              0.9455 |              0.0690 | Unemp:✗ Tax:✗
+
+================================================================================
+CONCLUSION:
+================================================================================
+
+After a stock market downturn (≥5% monthly decline):
+
+• UNEMPLOYMENT increases most after approximately 1 months
+• TAX REVENUE changes most after approximately 4 months
+
+This suggests a delayed effect where economic indicators
+only change significantly several months after a market crash.
+
+================================================================================
