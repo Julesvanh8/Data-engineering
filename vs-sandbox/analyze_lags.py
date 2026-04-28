@@ -434,27 +434,40 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     print(f"  {len(df)} rows  ({df.index.min().date()} → {df.index.max().date()})")
 
     print("Building events...")
-    events   = build_events(df)
+    events = build_events(df)
+
+    if events.empty:
+        raise RuntimeError(
+            "No events were detected. Check the S&P 500 threshold or the input data."
+        )
+
     n_events = events["name"].nunique()
     print(f"  {n_events} events (drawdown threshold {SP500_THRESHOLD}%):")
+
     for _, r in events.drop_duplicates("name").sort_values("sp500_start").iterrows():
         print(f"    {r['name']}  →  start {pd.Timestamp(r['sp500_start']).date()}")
+
     events.to_csv(EVENTS_OUT, index=False)
     print(f"  Saved {EVENTS_OUT.name}  ({n_events} events, {len(events)} rows)")
 
-    #print("Running aggregation...")
-    #agg   = aggregate_event_study(events)
+    print("Running aggregation...")
+    agg = aggregate_event_study(events)
 
     print("Running cross-correlation analysis...")
     xcorr = run_cross_correlation(df)
 
-    #results = agg.merge(xcorr, on="lag", suffixes=("_event", "_xcorr"))
-    #results.to_csv(LAG_OUT, index=False)
-    #print(f"  Saved {LAG_OUT.name}")
+    results = agg.merge(
+        xcorr,
+        on="lag",
+        suffixes=("_event", "_xcorr")
+    )
 
-    #print_summary(agg, xcorr)
-    #return df, results, events
-    return df, events
+    results.to_csv(LAG_OUT, index=False)
+    print(f"  Saved {LAG_OUT.name}")
+
+    print_summary(agg, xcorr)
+
+    return df, results, events
 
 
 if __name__ == "__main__":
