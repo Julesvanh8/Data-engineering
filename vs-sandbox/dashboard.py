@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT        = Path(__file__).resolve().parents[1]
 PROCESSED   = ROOT / "data" / "processed"
 
-MAIN_CSV    = PROCESSED / "merged_monthly_vs.csv"
+MAIN_CSV    = PROCESSED / "merged_monthly.csv"
 EVENTS_CSV  = PROCESSED / "events_combined.csv"
 NAMED_COLORS = {
     "Dot-com crash":           "rgba(255, 180, 180, 0.35)",

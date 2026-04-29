@@ -305,7 +305,7 @@ def run_pipeline(
         merged = merged.join(wb_monthly, how="left")
 
     merged.index.name = "month"
-    output_path = processed_dir / "merged_monthly_dataset.csv"
+    output_path = processed_dir / "merged_monthly.csv"
     merged.to_csv(output_path)
     return output_path
 

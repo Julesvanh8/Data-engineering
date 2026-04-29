@@ -18,7 +18,7 @@ import numpy as np
 from pathlib import Path
 from scipy import stats
 
-DATA_PATH  = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly_vs.csv"
+DATA_PATH  = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly.csv"
 EVENTS_OUT = Path(__file__).resolve().parents[1] / "data" / "processed" / "events_combined.csv"
 
 MAX_LAG                 = 23
