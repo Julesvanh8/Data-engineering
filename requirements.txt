@@ -13,3 +13,4 @@ python-dotenv
 plotly
 scipy
 streamlit
+pyspark
