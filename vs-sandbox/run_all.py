@@ -9,6 +9,10 @@ from ingest_tax_fred import load_env
 load_env(Path(__file__).resolve().parents[1])  # must be before os.getenv calls
 
 import os
+import subprocess
+import sys
+import tkinter as tk
+from tkinter import messagebox
 from db import initialise_db
 from ingest_sp500 import fetch_sp500, store_sp500
 from ingest_unemployment import fetch_unemployment, store_unemployment
@@ -38,12 +42,35 @@ if __name__ == "__main__":
     store_tax_revenue(fetch_tax_revenue())
 
     print("\n=== Building dataset ===")
-    build_dataset()
+    root = tk.Tk()
+    root.withdraw()
+    use_spark = messagebox.askyesno(
+        "Pipeline configuration",
+        "Use Apache Spark for the ETL build step?\n\n"
+        "⚠️  Spark has a ~30s JVM startup and is less efficient\n"
+        "for this dataset size (< 1000 rows).\n\n"
+        "Yes = PySpark  (outputs Parquet)\n"
+        "No  = Pandas   (outputs CSV, faster)"
+    )
+    root.destroy()
+
+    if use_spark:
+        from build_dataset_spark import build_dataset as build_spark
+        build_spark()
+        analysis_path = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly_vs.parquet"
+    else:
+        build_dataset()
+        analysis_path = None  # uses default CSV path
 
     print("\n=== Lag analysis ===")
-    run_analysis()
+    run_analysis(data_path=analysis_path)
 
     print("\n=== Visualisations ===")
     run_visualize()
 
     print("\nPipeline complete.")
+
+    print("\n=== Launching dashboard ===")
+    dashboard = Path(__file__).resolve().parent / "dashboard.py"
+    subprocess.Popen([sys.executable, "-m", "streamlit", "run", str(dashboard)])
+    print("  Dashboard running in background — open http://localhost:8501")
