@@ -8,7 +8,6 @@ Usage:
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-
 from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
@@ -20,7 +19,6 @@ PROCESSED   = ROOT / "data" / "processed"
 
 MAIN_CSV    = PROCESSED / "merged_monthly_vs.csv"
 EVENTS_CSV  = PROCESSED / "events_combined.csv"
-
 NAMED_COLORS = {
     "Dot-com crash":           "rgba(255, 180, 180, 0.35)",
     "Global Financial Crisis": "rgba(255, 200, 150, 0.35)",
@@ -406,7 +404,6 @@ def page_lag_distribution(catalog: pd.DataFrame):
         margin=dict(t=30, b=50),
     )
     st.plotly_chart(fig2, width="stretch")
-
 
 # ── page: downturn catalog ────────────────────────────────────────────────────
 
