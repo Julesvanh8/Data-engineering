@@ -8,7 +8,7 @@ Usage:
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
+
 from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
@@ -19,10 +19,7 @@ ROOT        = Path(__file__).resolve().parents[1]
 PROCESSED   = ROOT / "data" / "processed"
 
 MAIN_CSV    = PROCESSED / "merged_monthly_vs.csv"
-LAG_CSV     = PROCESSED / "lag_results.csv"
 EVENTS_CSV  = PROCESSED / "events_combined.csv"
-
-NAMED_EVENT_NAMES = {"Dot-com crash", "Global Financial Crisis", "COVID crash"}
 
 NAMED_COLORS = {
     "Dot-com crash":           "rgba(255, 180, 180, 0.35)",
@@ -30,9 +27,6 @@ NAMED_COLORS = {
     "COVID crash":             "rgba(180, 220, 255, 0.35)",
 }
 OTHER_COLOR = "rgba(210, 210, 210, 0.35)"
-
-PALETTE = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
-           "#edc948", "#b07aa1", "#ff9da7", "#9c755f"]
 
 # ── data loading (cached) ─────────────────────────────────────────────────────
 
@@ -43,21 +37,10 @@ def load_main() -> pd.DataFrame:
     return df
 
 @st.cache_data
-def load_lags() -> pd.DataFrame:
-    return pd.read_csv(LAG_CSV)
-
-@st.cache_data
 def load_raw_events() -> pd.DataFrame:
     if not EVENTS_CSV.exists():
         return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
     return pd.read_csv(EVENTS_CSV)
-
-@st.cache_data
-def load_named_events() -> pd.DataFrame:
-    if not EVENTS_CSV.exists():
-        return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
-    df = pd.read_csv(EVENTS_CSV)
-    return df[df["name"].isin(NAMED_EVENT_NAMES)]
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
@@ -100,6 +83,13 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
     st.header("Time Series Overview")
     show_log = st.checkbox("Show log(S&P 500)", value=True)
 
+    with st.container(border=True):
+        st.caption("Shading options")
+        col1, col2, col3 = st.columns(3)
+        shade_sp500 = col1.checkbox("S&P 500 drops", value=True)
+        shade_unemp = col2.checkbox("Unemployment rises", value=False)
+        shade_tax   = col3.checkbox("Federal tax declines", value=False)
+
     n_rows = 3 + (1 if show_log else 0)
     row_heights = ([0.28, 0.18] if show_log else [0.30]) + [0.26, 0.26]
     subplot_titles = (
@@ -119,7 +109,8 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
         x=df.index, y=df["close"],
         name="S&P 500 (Shiller)", line=dict(color="#1f77b4", width=1.2),
     ), row=1, col=1)
-    add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=1, label_events=True)
+    if shade_sp500:
+        add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=1, label_events=True)
 
     log_row = 2
     if show_log:
@@ -128,7 +119,8 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
             name="log(S&P 500)", line=dict(color="#1f77b4", width=1.2, dash="dot"),
             showlegend=True,
         ), row=2, col=1)
-        add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=2)
+        if shade_sp500:
+            add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=2)
     else:
         log_row = 1
 
@@ -140,14 +132,20 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
         x=df.index, y=df["unemployment_rate"],
         name="Unemployment rate", line=dict(color="#d62728", width=1.2),
     ), row=unemp_row, col=1)
-    add_period_shapes(fig, catalog, "unemp_event_start", "unemp_peak_date", row=unemp_row)
+    if shade_sp500:
+        add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=unemp_row)
+    if shade_unemp:
+        add_period_shapes(fig, catalog, "unemp_event_start", "unemp_peak_date", row=unemp_row)
 
     # Tax receipts
     fig.add_trace(go.Scatter(
         x=df.index, y=df["receipts_bn"],
         name="Federal tax receipts (bn $)", line=dict(color="#2ca02c", width=1.2),
     ), row=tax_row, col=1)
-    add_period_shapes(fig, catalog, "tax_event_start", "tax_trough_date", row=tax_row)
+    if shade_sp500:
+        add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=tax_row)
+    if shade_tax:
+        add_period_shapes(fig, catalog, "tax_event_start", "tax_trough_date", row=tax_row)
 
     # Range slider on the bottom x-axis
     last_xaxis = f"xaxis{n_rows}" if n_rows > 1 else "xaxis"
@@ -176,7 +174,7 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
 
 # ── page: research findings ───────────────────────────────────────────────────
 
-def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) -> None:
+def page_findings(raw: pd.DataFrame, catalog: pd.DataFrame) -> None:
     st.header("Research Findings")
     st.markdown(
         "**Research question:** How long after a U.S. stock market downturn do "
@@ -261,10 +259,9 @@ def page_findings(lags: pd.DataFrame, raw: pd.DataFrame, catalog: pd.DataFrame) 
 
     st.markdown("---")
     st.markdown(
-        "**Methodology note:** The event study is the primary analysis — it is conditional on the "
+        "**Methodology note:** The event study is conditional on the "
         f"{len(catalog)} identified bear markets (≥19% drawdown from ATH). "
-        "The cross-correlation (see sidebar) uses all ~900 months of data and is not event-conditional; "
-        "its signal is diluted by normal months but provides a larger-sample statistical validation."
+        "See the Downturn Catalog for per-event timing."
     )
 
 
@@ -272,7 +269,7 @@ def page_event_study(raw: pd.DataFrame):
     st.header("Event Study: Impulse Response")
     st.markdown(
         "Each gray line is one detected S&P 500 downturn event. "
-        "The bold colored line is the average across all events."
+        "The bold colored line is the average across **selected** events."
     )
 
     if "lag" not in raw.columns or raw.empty:
@@ -284,78 +281,56 @@ def page_event_study(raw: pd.DataFrame):
     col = col_map[indicator]
     ylabel = "pp change" if indicator == "Unemployment" else "% change vs baseline"
 
-    lags   = sorted(raw["lag"].unique())
-    events = raw["name"].unique()
+    lags       = sorted(raw["lag"].unique())
+    all_events = sorted(raw["name"].unique())
+
+    st.markdown("""
+        <style>
+        [data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+            background-color: #5a7fa8 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    selected = st.multiselect(
+        "Include in average",
+        options=all_events,
+        default=all_events,
+        key="event_study_sel",
+    )
 
     fig = go.Figure()
-    for event in events:
+    for event in selected:
         sub = raw[raw["name"] == event].set_index("lag").reindex(lags)
         fig.add_trace(go.Scatter(
             x=lags, y=sub[col], mode="lines",
             line=dict(color="gray", width=0.7),
             opacity=0.35, showlegend=False,
-            hovertemplate=f"Event {event}<br>Lag %{{x}}<br>{col}=%{{y:.2f}}<extra></extra>",
+            hovertemplate=f"{event}<br>Lag %{{x}}<br>{col}=%{{y:.2f}}<extra></extra>",
         ))
 
-    avg = raw.groupby("lag")[col].mean().reindex(lags)
-    color = "#d62728" if indicator == "Unemployment" else "#2ca02c"
-    fig.add_trace(go.Scatter(
-        x=lags, y=avg, mode="lines+markers",
-        line=dict(color=color, width=2.5),
-        marker=dict(size=5), name="Average",
-    ))
+    if selected:
+        avg = raw[raw["name"].isin(selected)].groupby("lag")[col].mean().reindex(lags)
+        color = "#c44e52" if indicator == "Unemployment" else "#3a7d50"
+        fig.add_trace(go.Scatter(
+            x=lags, y=avg, mode="lines+markers",
+            line=dict(color=color, width=2.5),
+            marker=dict(size=5), name=f"Average ({len(selected)} events)",
+        ))
+
     fig.add_hline(y=0, line_dash="dash", line_color="black", line_width=0.8)
     fig.update_layout(
         xaxis_title="Months after downturn start",
         yaxis_title=ylabel,
         height=450,
         hovermode="x",
+        showlegend=True,
+        legend=dict(orientation="h", x=0, y=-0.15),
     )
     st.plotly_chart(fig, width="stretch")
 
-
-# ── page: named event lags ────────────────────────────────────────────────────
-
-def page_named_events(named: pd.DataFrame):
-    st.header("Lag Analysis per Named Downturn")
-    st.markdown("Change vs. 6-month pre-event baseline for Dot-com (2000), Global Financial Crisis (2008), and COVID (2020).")
-
-    if "lag" not in named.columns or named.empty:
-        st.info("Run `analyze_lags.py` to generate event study data.")
-        return
-
-    indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True, key="ne_ind")
-    col = "unemp_change" if indicator == "Unemployment" else "tax_change"
-    ylabel = "pp change" if indicator == "Unemployment" else "% change vs baseline"
-
-    lags = sorted(named["lag"].unique())
-    fig = go.Figure()
-
-    events = sorted(named["name"].unique(),
-                    key=lambda e: named[named["name"] == e]["lag"].count(), reverse=True)
-    for i, event in enumerate(events):
-        color = PALETTE[i % len(PALETTE)]
-        sub = named[named["name"] == event].set_index("lag").reindex(lags)
-        if sub[col].notna().any():
-            fig.add_trace(go.Scatter(
-                x=lags, y=sub[col], mode="lines+markers",
-                name=event, line=dict(color=color, width=2),
-                marker=dict(size=5),
-            ))
-
-    legend_pos = dict(xanchor="right", x=1, yanchor="top", y=1) if indicator == "Unemployment" \
-                 else dict(orientation="h", xanchor="left", x=0, yanchor="bottom", y=0,
-                           entrywidthmode="fraction", entrywidth=0.5)
-
-    fig.add_hline(y=0, line_dash="dash", line_color="black", line_width=0.8)
-    fig.update_layout(
-        xaxis_title="Months after downturn start",
-        yaxis_title=ylabel,
-        height=450,
-        hovermode="x unified",
-        legend=legend_pos,
-    )
-    st.plotly_chart(fig, width="stretch")
+    if not selected:
+        st.warning("No events selected — select at least one to see an average.")
 
 
 # ── page: lag distribution ───────────────────────────────────────────────────
@@ -431,76 +406,6 @@ def page_lag_distribution(catalog: pd.DataFrame):
         margin=dict(t=30, b=50),
     )
     st.plotly_chart(fig2, width="stretch")
-
-
-# ── page: cross-correlation ───────────────────────────────────────────────────
-
-def page_cross_correlation(lags: pd.DataFrame):
-    st.header("Cross-Correlation Analysis")
-    st.markdown(
-        "Pearson correlation between S&P 500 monthly return and the **lagged** change in each "
-        "economic indicator. Starred bars are significant at p < 0.05."
-    )
-
-    indicator = st.radio("Indicator", ["Unemployment", "Tax receipts"], horizontal=True, key="xcorr_ind")
-    r_col = "r_unemp" if indicator == "Unemployment" else "r_tax"
-    p_col = "p_unemp_xcorr" if indicator == "Unemployment" else "p_tax_xcorr"
-
-    colors = [
-        "#1f77b4" if p < 0.05 else "#aec7e8"
-        for p in lags[p_col]
-    ]
-    stars = ["★" if p < 0.05 else "" for p in lags[p_col]]
-
-    fig = go.Figure(go.Bar(
-        x=lags["lag"], y=lags[r_col],
-        marker_color=colors,
-        text=stars, textposition="outside",
-        hovertemplate="Lag %{x} months<br>r = %{y:.4f}<extra></extra>",
-    ))
-    fig.add_hline(y=0, line_color="black", line_width=0.8)
-    fig.update_layout(
-        xaxis_title="Lag (months)",
-        yaxis_title="Pearson r",
-        xaxis=dict(tickmode="linear", tick0=lags["lag"].min(), dtick=1),
-        height=420,
-    )
-    st.plotly_chart(fig, width="stretch")
-
-    st.subheader("Full lag table")
-    show_cols = ["lag", "avg_unemp_change", "avg_tax_change",
-                 "r_unemp", "p_unemp_xcorr", "r_tax", "p_tax_xcorr", "n_events"]
-    avail = [c for c in show_cols if c in lags.columns]
-    st.dataframe(
-        lags[avail].style.format({c: "{:.4f}" for c in avail if c not in ("lag", "n_events")}),
-        width="stretch",
-    )
-
-
-# ── page: heatmap ─────────────────────────────────────────────────────────────
-
-def page_heatmap(lags: pd.DataFrame):
-    st.header("Correlation Heatmap")
-
-    heat = lags.set_index("lag")[["r_unemp", "r_tax"]].T
-    heat.index = ["Unemployment", "Tax receipts"]
-
-    fig = px.imshow(
-        heat,
-        color_continuous_scale="RdBu_r",
-        color_continuous_midpoint=0,
-        zmin=-0.5, zmax=0.5,
-        text_auto=".3f",
-        aspect="auto",
-        labels=dict(x="Lag (months)", color="Pearson r"),
-    )
-    fig.update_layout(
-        title="Cross-Correlation Heatmap: S&P 500 Return → Lagged Economic Change",
-        height=260,
-        coloraxis_colorbar=dict(title="r"),
-        margin=dict(l=120, r=30, t=60, b=60),
-    )
-    st.plotly_chart(fig, width="stretch")
 
 
 # ── page: downturn catalog ────────────────────────────────────────────────────
@@ -682,20 +587,14 @@ def main():
 
     df      = load_main()
     catalog = load_catalog()
-    lags    = load_lags() if LAG_CSV.exists() else pd.DataFrame()
     raw     = load_raw_events()
-    named   = load_named_events()
-
     pages = {
-        "Research Findings":    lambda: page_findings(lags, raw, catalog),
-        "Lag Distribution":     lambda: page_lag_distribution(catalog),
-        "Event Study":          lambda: page_event_study(raw),
-        "Per-Event Analysis":   lambda: page_named_events(named),
-        "Event Deep Dive":      lambda: page_event_deepdive(df, catalog),
-        "Downturn Catalog":     lambda: page_catalog(catalog),
-        "Time Series":          lambda: page_time_series(df, catalog),
-        "Cross-Correlation":    lambda: page_cross_correlation(lags),
-        "Heatmap":              lambda: page_heatmap(lags),
+        "Research Findings":  lambda: page_findings(raw, catalog),
+        "Time Series":        lambda: page_time_series(df, catalog),
+        "Event Deep Dive":    lambda: page_event_deepdive(df, catalog),
+        "Downturn Catalog":   lambda: page_catalog(catalog),
+        "Lag Distribution":   lambda: page_lag_distribution(catalog),
+        "Event Study":        lambda: page_event_study(raw),
     }
 
     with st.sidebar:

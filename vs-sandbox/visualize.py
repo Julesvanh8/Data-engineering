@@ -6,9 +6,7 @@ Plots produced (saved to outputs/figures/):
                              with named downturn periods shaded.
   2. event_study.png       — Impulse-response style: per-event lines + average
                              change in unemployment and tax at each lag.
-  3. cross_correlation.png — Pearson r between S&P returns and economic
-                             indicators at each forward lag (bars, p<0.05 starred).
-  4. heatmap.png           — Correlation coefficients as a 2×18 heatmap.
+  3. named_event_lags.png  — Per-named-event lag analysis.
 
 Usage:
     python vs-sandbox/visualize.py
@@ -18,14 +16,12 @@ Usage:
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import seaborn as sns
 from pathlib import Path
 
 PROCESSED = Path(__file__).resolve().parents[1] / "data" / "processed"
 FIGURES   = Path(__file__).resolve().parents[1] / "outputs" / "figures"
 
 MAIN_CSV         = PROCESSED / "merged_monthly_vs.csv"
-LAG_CSV          = PROCESSED / "lag_results.csv"
 RAW_EVENT_CSV    = PROCESSED / "event_study_raw.csv"
 NAMED_EVENT_CSV  = PROCESSED / "named_event_lags.csv"
 TAX_SOURCES_CSV  = PROCESSED / "tax_sources.csv"
@@ -47,10 +43,6 @@ def load_main() -> pd.DataFrame:
     df = pd.read_csv(MAIN_CSV, parse_dates=["date"], index_col="date")
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     return df
-
-
-def load_lags() -> pd.DataFrame:
-    return pd.read_csv(LAG_CSV)
 
 
 def load_raw_events() -> pd.DataFrame:
@@ -187,74 +179,7 @@ def plot_event_study(raw: pd.DataFrame) -> None:
     print("  Saved event_study.png")
 
 
-# ── plot 3: cross-correlation ─────────────────────────────────────────────────
-
-def plot_cross_correlation(lags: pd.DataFrame) -> None:
-    fig, (ax_u, ax_t) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    fig.suptitle("Cross-Correlation: S&P 500 Monthly Return → Economic Indicators",
-                 fontsize=13, fontweight="bold")
-
-    lag_vals = lags["lag"].values
-
-    def bar_colors(r_col, p_col):
-        return ["#d62728" if (r > 0 and p < 0.05) else
-                "#1f77b4" if (r < 0 and p < 0.05) else
-                "#aec7e8"
-                for r, p in zip(lags[r_col], lags[p_col])]
-
-    ax_u.bar(lag_vals, lags["r_unemp"], color=bar_colors("r_unemp", "p_unemp_xcorr"), edgecolor="white")
-    ax_t.bar(lag_vals, lags["r_tax"],   color=bar_colors("r_tax",   "p_tax_xcorr"),   edgecolor="white")
-
-    # Stars for significant bars
-    for ax, r_col, p_col in [(ax_u, "r_unemp", "p_unemp_xcorr"),
-                              (ax_t, "r_tax",   "p_tax_xcorr")]:
-        for _, row in lags.iterrows():
-            if row[p_col] < 0.05:
-                y = row[r_col] + (0.005 if row[r_col] >= 0 else -0.012)
-                ax.text(row["lag"], y, "*", ha="center", fontsize=12, color="black")
-
-    for ax in (ax_u, ax_t):
-        ax.axhline(0, color="black", linewidth=0.8)
-        ax.set_xticks(lag_vals)
-        ax.grid(True, alpha=0.3, axis="y", linestyle="--")
-        ax.set_ylabel("Pearson r")
-
-    ax_u.set_title("Unemployment rate change (lagged)")
-    ax_t.set_title("Tax receipts change (lagged)")
-    ax_t.set_xlabel("Lag (months)")
-
-    sig_patch   = mpatches.Patch(color="#1f77b4", label="Significant (p < 0.05)")
-    insig_patch = mpatches.Patch(color="#aec7e8", label="Not significant")
-    ax_u.legend(handles=[sig_patch, insig_patch], fontsize=9)
-
-    fig.tight_layout()
-    fig.savefig(FIGURES / "cross_correlation.png", dpi=150)
-    plt.close()
-    print("  Saved cross_correlation.png")
-
-
-# ── plot 4: heatmap ───────────────────────────────────────────────────────────
-
-def plot_heatmap(lags: pd.DataFrame) -> None:
-    heat = lags.set_index("lag")[["r_unemp", "r_tax"]].T
-    heat.index = ["Unemployment", "Tax receipts"]
-
-    fig, ax = plt.subplots(figsize=(14, 3))
-    sns.heatmap(heat, annot=True, fmt=".3f", cmap="RdBu_r", center=0,
-                linewidths=0.5, linecolor="white",
-                cbar_kws={"label": "Pearson r", "shrink": 0.6},
-                ax=ax)
-    ax.set_title("Cross-Correlation Heatmap: S&P 500 Return → Lagged Economic Change",
-                 fontsize=12, fontweight="bold", pad=12)
-    ax.set_xlabel("Lag (months)")
-    ax.set_ylabel("")
-    fig.tight_layout()
-    fig.savefig(FIGURES / "heatmap.png", dpi=150)
-    plt.close()
-    print("  Saved heatmap.png")
-
-
-# ── plot 5: per-named-event lag analysis ──────────────────────────────────────
+# ── plot 3: per-named-event lag analysis ──────────────────────────────────────
 
 PALETTE = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
            "#edc948", "#b07aa1", "#ff9da7", "#9c755f"]
@@ -305,7 +230,6 @@ def run() -> None:
 
     print("Loading data...")
     df           = load_main()
-    lags         = load_lags()
     raw          = load_raw_events()
     named        = load_named_events()
     tax          = load_tax_sources()
@@ -322,8 +246,6 @@ def run() -> None:
     plot_time_series(df, tax, fred_unemp, catalog)
     plot_event_study(raw)
     plot_named_event_lags(named)
-    plot_cross_correlation(lags)
-    plot_heatmap(lags)
 
     print(f"\nAll plots saved to {FIGURES}/")
 
