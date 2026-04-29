@@ -1,18 +1,15 @@
 """
-analyze_lags.py — event-study lag analysis for the vs-sandbox pipeline.
+analyze_lags.py — event-study lag analysis for the pipeline.
 
 Research question:
     How long after a U.S. stock market downturn do unemployment and
     federal income tax revenues change?
 
-Two complementary approaches:
-    1. Event study   — track average change vs pre-downturn baseline
-                       at each lag (1-MAX_LAG months) across all detected events.
-    2. Cross-correlation — Pearson r between monthly S&P 500 returns
-                           and economic indicator changes at each forward lag.
+Approach:
+    Event study   — track average change vs pre-downturn baseline
+                    at each lag (1-MAX_LAG months) across all detected events.
 
 Outputs:
-    data/processed/lag_results.csv      (aggregated per-lag statistics)
     data/processed/events_combined.csv  (per-event, per-lag raw changes + catalog metadata)
 """
 
@@ -22,7 +19,6 @@ from pathlib import Path
 from scipy import stats
 
 DATA_PATH  = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly_vs.csv"
-LAG_OUT    = Path(__file__).resolve().parents[1] / "data" / "processed" / "lag_results.csv"
 EVENTS_OUT = Path(__file__).resolve().parents[1] / "data" / "processed" / "events_combined.csv"
 
 MAX_LAG                 = 23
@@ -353,39 +349,9 @@ def aggregate_event_study(raw: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ── cross-correlation ─────────────────────────────────────────────────────────
-
-def run_cross_correlation(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pearson correlation between S&P 500 monthly return and the change in
-    unemployment / tax receipts at each forward lag (1-MAX_LAG months).
-    """
-    sp = df["pct_change"].dropna()
-
-    rows = []
-    for lag in range(1, MAX_LAG + 1):
-        future_u = df["pp_change_unrate"].shift(-lag)
-        future_t = df["pct_change_receipts"].shift(-lag)
-
-        aligned_u = pd.concat([sp, future_u], axis=1, sort=False).dropna()
-        aligned_t = pd.concat([sp, future_t], axis=1, sort=False).dropna()
-
-        r_u, p_u = stats.pearsonr(aligned_u.iloc[:, 0], aligned_u.iloc[:, 1]) if len(aligned_u) > 2 else (np.nan, np.nan)
-        r_t, p_t = stats.pearsonr(aligned_t.iloc[:, 0], aligned_t.iloc[:, 1]) if len(aligned_t) > 2 else (np.nan, np.nan)
-
-        rows.append({
-            "lag":    lag,
-            "r_unemp": round(r_u, 4),
-            "p_unemp": round(p_u, 4),
-            "r_tax":   round(r_t, 4),
-            "p_tax":   round(p_t, 4),
-        })
-    return pd.DataFrame(rows)
-
-
 # ── summary print ─────────────────────────────────────────────────────────────
 
-def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
+def print_summary(agg: pd.DataFrame) -> None:
     print("\n" + "=" * 60)
     print("RESEARCH QUESTION ANSWER")
     print("How long after a U.S. stock market downturn do unemployment")
@@ -413,23 +379,18 @@ def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
     print("\n  Aggregated changes by lag:")
     print(agg[["lag", "avg_unemp_change", "avg_tax_change", "p_unemp", "p_tax"]].to_string(index=False))
 
-    print("\n── SUPPORTING: Cross-Correlation (all months, not event-conditional) ──")
-    print("  Note: uses the full time series (~900 months), not just the downturn events.")
-    print("  Signal is diluted by normal (non-downturn) months.")
-    peak_xu = xcorr.loc[xcorr["r_unemp"].abs().idxmax(), "lag"]
-    peak_xt = xcorr.loc[xcorr["r_tax"].abs().idxmax(), "lag"]
-    r_xu    = xcorr.loc[xcorr["lag"] == peak_xu, "r_unemp"].values[0]
-    r_xt    = xcorr.loc[xcorr["lag"] == peak_xt, "r_tax"].values[0]
-    print(f"  Strongest unemp correlation : lag {peak_xu} months  (r={r_xu})")
-    print(f"  Strongest tax correlation   : lag {peak_xt} months  (r={r_xt})")
     print("=" * 60 + "\n")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def run(data_path=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    path = Path(data_path) if data_path else DATA_PATH
     print("Loading data...")
-    df = pd.read_csv(DATA_PATH, parse_dates=["date"], index_col="date")
+    if path.suffix == ".parquet" or path.is_dir():
+        df = pd.read_parquet(path).set_index("date")
+    else:
+        df = pd.read_csv(path, parse_dates=["date"], index_col="date")
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     print(f"  {len(df)} rows  ({df.index.min().date()} → {df.index.max().date()})")
 
@@ -453,21 +414,9 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     print("Running aggregation...")
     agg = aggregate_event_study(events)
 
-    print("Running cross-correlation analysis...")
-    xcorr = run_cross_correlation(df)
+    print_summary(agg)
 
-    results = agg.merge(
-        xcorr,
-        on="lag",
-        suffixes=("_event", "_xcorr")
-    )
-
-    results.to_csv(LAG_OUT, index=False)
-    print(f"  Saved {LAG_OUT.name}")
-
-    print_summary(agg, xcorr)
-
-    return df, results, events
+    return df, events
 
 
 if __name__ == "__main__":
