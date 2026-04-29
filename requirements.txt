@@ -8,3 +8,9 @@ xlrd
 openpyxl
 seaborn
 scipy
+yfinance
+python-dotenv
+plotly
+scipy
+streamlit
+pyspark
