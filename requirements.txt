@@ -1,16 +1,19 @@
-pandas
-numpy
-requests
-matplotlib
-jupyter
-statsmodels
-xlrd
-openpyxl
-seaborn
-scipy
-yfinance
-python-dotenv
-plotly
-scipy
-streamlit
-pyspark
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Data ingestion
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# DBT and SQL
+dbt-core>=1.7.0
+dbt-sqlite>=1.7.0
+
+# Analysis and visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.18.0
+
+# Dashboard
+streamlit>=1.28.0

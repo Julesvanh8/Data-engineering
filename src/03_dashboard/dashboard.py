@@ -2,7 +2,7 @@
 dashboard.py — interactive Streamlit + Plotly dashboard for the lag analysis.
 
 Usage:
-    streamlit run vs-sandbox/dashboard.py
+    streamlit run src/03_dashboard/dashboard.py
 """
 
 import numpy as np
@@ -11,13 +11,60 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
+import sqlite3
+import hashlib
+
+# ── authentication ─────────────────────────────────────────────────────────────
+
+def check_password():
+    """Returns `True` if the user has entered the correct password."""
+    
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        entered_password = st.session_state["password"]
+        
+        # Get password from secrets (Streamlit Cloud) or use default for local
+        try:
+            correct_password = st.secrets["dashboard_password"]
+        except (KeyError, FileNotFoundError):
+            # For local development, use a default password
+            correct_password = "demo123"
+            st.warning("⚠️ Using default password (demo123). Configure secrets for production!")
+        
+        # Hash the entered password for security
+        entered_hash = hashlib.sha256(entered_password.encode()).hexdigest()
+        correct_hash = hashlib.sha256(correct_password.encode()).hexdigest()
+        
+        if entered_hash == correct_hash:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store the actual password
+        else:
+            st.session_state["password_correct"] = False
+
+    # Return True if password is already validated
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Show password input
+    st.title("🔐 Dashboard Login")
+    st.text_input(
+        "Enter password to access the dashboard:",
+        type="password",
+        on_change=password_entered,
+        key="password"
+    )
+    
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        st.error("❌ Incorrect password. Please try again.")
+    
+    return False
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
-ROOT        = Path(__file__).resolve().parents[1]
+ROOT        = Path(__file__).resolve().parents[2]
 PROCESSED   = ROOT / "data" / "processed"
 
-MAIN_CSV    = PROCESSED / "merged_monthly.csv"
+DB_PATH     = ROOT / "data" / "raw" / "main_marts.db"
 EVENTS_CSV  = PROCESSED / "events_combined.csv"
 NAMED_COLORS = {
     "Dot-com crash":           "rgba(255, 180, 180, 0.35)",
@@ -30,20 +77,50 @@ OTHER_COLOR = "rgba(210, 210, 210, 0.35)"
 
 @st.cache_data
 def load_main() -> pd.DataFrame:
-    df = pd.read_csv(MAIN_CSV, parse_dates=["date"], index_col="date")
+    """Load data from DBT mart."""
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql(
+        "SELECT * FROM fct_combined_monthly ORDER BY date",
+        conn,
+        parse_dates=["date"],
+        index_col="date"
+    )
+    conn.close()
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     return df
 
 @st.cache_data
 def load_raw_events() -> pd.DataFrame:
     if not EVENTS_CSV.exists():
-        return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
+        st.info("📊 Generating event study data for the first time...")
+        try:
+            import subprocess
+            import sys
+            analysis_script = ROOT / "src" / "02_analysis" / "analyze_lags.py"
+            result = subprocess.run(
+                [sys.executable, str(analysis_script)],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                st.success("✅ Event study data generated successfully!")
+            else:
+                st.error(f"❌ Failed to generate data: {result.stderr}")
+                return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
+        except Exception as e:
+            st.error(f"❌ Error running analysis: {e}")
+            return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
     return pd.read_csv(EVENTS_CSV)
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
     if not EVENTS_CSV.exists():
-        return pd.DataFrame(columns=["name", "sp500_start", "sp500_trough", "sp500_pct_drop"])
+        st.warning("⚠️ Event catalog not available yet. Generating now...")
+        load_raw_events()  # This will trigger the generation
+        if not EVENTS_CSV.exists():
+            return pd.DataFrame(columns=["name", "sp500_start", "sp500_trough", "sp500_pct_drop"])
     df = pd.read_csv(EVENTS_CSV, parse_dates=["sp500_start", "sp500_trough",
                                                "unemp_event_start", "unemp_peak_date",
                                                "tax_event_start",   "tax_trough_date"])
@@ -104,8 +181,8 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
 
     # S&P 500
     fig.add_trace(go.Scatter(
-        x=df.index, y=df["close"],
-        name="S&P 500 (Shiller)", line=dict(color="#1f77b4", width=1.2),
+        x=df.index, y=df["sp500_close"],
+        name="S&P 500", line=dict(color="#1f77b4", width=1.2),
     ), row=1, col=1)
     if shade_sp500:
         add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=1, label_events=True)
@@ -113,7 +190,7 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
     log_row = 2
     if show_log:
         fig.add_trace(go.Scatter(
-            x=df.index, y=np.log(df["close"]),
+            x=df.index, y=np.log(df["sp500_close"]),
             name="log(S&P 500)", line=dict(color="#1f77b4", width=1.2, dash="dot"),
             showlegend=True,
         ), row=2, col=1)
@@ -137,7 +214,7 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
 
     # Tax receipts
     fig.add_trace(go.Scatter(
-        x=df.index, y=df["receipts_bn"],
+        x=df.index, y=df["federal_tax_revenue"],
         name="Federal tax receipts (bn $)", line=dict(color="#2ca02c", width=1.2),
     ), row=tax_row, col=1)
     if shade_sp500:
@@ -515,7 +592,7 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
     )
 
     fig.add_trace(go.Scatter(
-        x=w.index, y=w["close"],
+        x=w.index, y=w["sp500_close"],
         name="S&P 500", line=dict(color="#1f77b4", width=1.5),
     ), row=1, col=1)
 
@@ -525,7 +602,7 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
     ), row=2, col=1)
 
     fig.add_trace(go.Scatter(
-        x=w.index, y=w["receipts_bn"],
+        x=w.index, y=w["federal_tax_revenue"],
         name="Tax receipts", line=dict(color="#2ca02c", width=1.5),
     ), row=3, col=1)
 
@@ -539,7 +616,7 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
 
     if start_date in w.index:
         fig.add_annotation(
-            x=start_date, y=df.loc[start_date, "close"],
+            x=start_date, y=df.loc[start_date, "sp500_close"],
             text="Downturn start", showarrow=True, arrowhead=2,
             ax=30, ay=-40, font=dict(size=10), row=1, col=1,
         )
@@ -576,6 +653,11 @@ def main():
         page_icon="📈",
         layout="wide",
     )
+    
+    # Check password first
+    if not check_password():
+        st.stop()  # Stop execution if password is incorrect
+    
     st.title("How Long After a Stock Market Downturn Do Unemployment and Tax Revenues Change?")
     st.caption(
         "Research question: measuring the lag between U.S. S&P 500 downturns and changes "
