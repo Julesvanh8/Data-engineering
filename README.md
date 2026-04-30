@@ -68,8 +68,11 @@ Data-engineering/
 │   ├── figures/               # Generated visualizations
 │   └── tables/                # Analysis result tables
 │
-├── notebooks/                 # Exploratory analysis (Jupyter)
-├── tests/                     # Unit tests
+├── outputs/
+│   ├── figures/               # Generated visualizations
+│   └── tables/                # Analysis result tables
+│
+├── .env.example               # Environment variables template
 ├── requirements.txt           # Python dependencies
 └── README.md                  # This file
 ```
@@ -81,6 +84,10 @@ Data-engineering/
 ### 1. Setup Environment
 
 ```bash
+# Clone the repository
+git clone https://github.com/Julesvanh8/Data-engineering.git
+cd Data-engineering
+
 # Create virtual environment
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -91,10 +98,11 @@ pip install -r requirements.txt
 
 ### 2. Configure API Keys
 
-Create a `.env` file in the project root:
+Copy the example environment file and add your API key:
 
-```env
-FRED_API_KEY="your_fred_api_key_here"
+```bash
+cp .env.example .env
+# Edit .env and add your FRED API key
 ```
 
 Get your free FRED API key at: https://fred.stlouisfed.org/docs/api/api_key.html
