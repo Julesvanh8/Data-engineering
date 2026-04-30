@@ -228,3 +228,4 @@ outputs/tables/*.csv
 
 # MacOS
 .DS_Store
+.streamlit/secrets.toml
