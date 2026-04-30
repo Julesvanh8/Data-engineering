@@ -7,7 +7,7 @@ Uses PySpark for the ETL pipeline:
   3. Joins everything to a common monthly index
   4. Derives computed columns (pct_change, pp_change_unrate, pct_change_receipts)
      using Spark window functions
-  5. Outputs data/processed/merged_monthly_vs.parquet
+  5. Outputs data/processed/merged_monthly.parquet
 
 Usage:
     python vs-sandbox/build_dataset_spark.py
@@ -34,7 +34,7 @@ SHILLER_CSV     = Path(__file__).resolve().parents[1] / "data" / "raw" / "github
 FRED_UNRATE_CSV = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
 FRED_TAX_CSV    = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_w006rc1q027sbea.csv"
 PROCESSED_DIR   = Path(__file__).resolve().parents[1] / "data" / "processed"
-OUTPUT_PATH     = PROCESSED_DIR / "merged_monthly_vs.parquet"
+OUTPUT_PATH     = PROCESSED_DIR / "merged_monthly.parquet"
 
 
 def build_dataset() -> None:

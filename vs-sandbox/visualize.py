@@ -21,13 +21,12 @@ from pathlib import Path
 PROCESSED = Path(__file__).resolve().parents[1] / "data" / "processed"
 FIGURES   = Path(__file__).resolve().parents[1] / "outputs" / "figures"
 
-MAIN_CSV         = PROCESSED / "merged_monthly_vs.csv"
-RAW_EVENT_CSV    = PROCESSED / "event_study_raw.csv"
-NAMED_EVENT_CSV  = PROCESSED / "named_event_lags.csv"
-TAX_SOURCES_CSV  = PROCESSED / "tax_sources.csv"
-FRED_UNRATE_CSV  = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
-FRIEND_SP500_CSV = Path(__file__).resolve().parents[1] / "data" / "raw" / "github_sp500_daily.csv"
-CATALOG_CSV      = PROCESSED / "downturn_catalog.csv"
+MAIN_CSV   = PROCESSED / "merged_monthly.csv"
+EVENTS_CSV = PROCESSED / "events_combined.csv"
+
+FRED_UNRATE_CSV = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
+
+NAMED_EVENT_NAMES = {"Dot-com crash", "Global Financial Crisis", "COVID crash"}
 
 NAMED_COLORS = {
     "Dot-com crash":           "#ffcccc",
@@ -46,17 +45,12 @@ def load_main() -> pd.DataFrame:
 
 
 def load_raw_events() -> pd.DataFrame:
-    return pd.read_csv(RAW_EVENT_CSV)
+    return pd.read_csv(EVENTS_CSV)
 
 
 def load_named_events() -> pd.DataFrame:
-    return pd.read_csv(NAMED_EVENT_CSV)
-
-
-def load_friend_sp500() -> pd.Series:
-    df = pd.read_csv(FRIEND_SP500_CSV, parse_dates=["date"], index_col="date")
-    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
-    return df["close"]
+    df = pd.read_csv(EVENTS_CSV)
+    return df[df["name"].isin(NAMED_EVENT_NAMES)]
 
 
 def load_fred_unrate() -> pd.Series:
@@ -65,21 +59,23 @@ def load_fred_unrate() -> pd.Series:
     return df["UNRATE"]
 
 
-def load_tax_sources() -> pd.DataFrame:
-    df = pd.read_csv(TAX_SOURCES_CSV, parse_dates=["date"], index_col="date")
-    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
-    return df
-
-
 def load_catalog() -> pd.DataFrame:
-    if not CATALOG_CSV.exists():
+    if not EVENTS_CSV.exists():
         return pd.DataFrame(columns=["name", "start_date", "trough_date", "pct_drop", "duration_months"])
-    df = pd.read_csv(CATALOG_CSV, parse_dates=["start_date", "trough_date"])
-    return df
+    df = pd.read_csv(EVENTS_CSV, parse_dates=["sp500_start", "sp500_trough"])
+    return (
+        df.drop_duplicates(subset=["name"])
+        .rename(columns={
+            "sp500_start":    "start_date",
+            "sp500_trough":   "trough_date",
+            "sp500_pct_drop": "pct_drop",
+            "sp500_duration": "duration_months",
+        })[["name", "start_date", "trough_date", "pct_drop", "duration_months"]]
+        .reset_index(drop=True)
+    )
 
 
 def shade_downturns(ax, catalog: pd.DataFrame) -> None:
-    """Shade all catalog downturns: named ones in their color, others in gray."""
     for _, row in catalog.iterrows():
         color = NAMED_COLORS.get(row["name"], OTHER_COLOR)
         ax.axvspan(row["start_date"], row["trough_date"],
@@ -88,7 +84,7 @@ def shade_downturns(ax, catalog: pd.DataFrame) -> None:
 
 # ── plot 1: time series ───────────────────────────────────────────────────────
 
-def plot_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series,
+def plot_time_series(df: pd.DataFrame, fred_unrate: pd.Series,
                      catalog: pd.DataFrame) -> None:
     import numpy as np
     fig, axes = plt.subplots(4, 1, figsize=(14, 13), sharex=True)
@@ -102,7 +98,7 @@ def plot_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series
     axes[0].grid(True, alpha=0.3, linestyle="--")
     named_patches = [mpatches.Patch(color=c, alpha=0.5, label=n)
                      for n, c in NAMED_COLORS.items()]
-    other_patch   = mpatches.Patch(color=OTHER_COLOR, alpha=0.5, label="Other detected downturns")
+    other_patch = mpatches.Patch(color=OTHER_COLOR, alpha=0.5, label="Other detected downturns")
     axes[0].legend(handles=[line_sp] + named_patches + [other_patch],
                    fontsize=8, loc="upper left")
 
@@ -113,7 +109,7 @@ def plot_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series
     axes[1].grid(True, alpha=0.3, linestyle="--")
     axes[1].legend(handles=[line_log], labels=["log(S&P 500)"], fontsize=8, loc="upper left")
 
-    # Panel 3: Unemployment — FRED UNRATE only
+    # Panel 3: Unemployment
     line_unemp, = axes[2].plot(fred_unrate.index, fred_unrate,
                                color="#d62728", linewidth=1.2)
     shade_downturns(axes[2], catalog)
@@ -122,12 +118,12 @@ def plot_time_series(df: pd.DataFrame, tax: pd.DataFrame, fred_unrate: pd.Series
     axes[2].legend(handles=[line_unemp], labels=["FRED UNRATE"],
                    fontsize=8, loc="upper left")
 
-    # Panel 4: Tax — FRED only
-    line_fred, = axes[3].plot(tax.index, tax["fred_bn"], color="#2ca02c", linewidth=1.2)
+    # Panel 4: Tax receipts
+    line_tax, = axes[3].plot(df.index, df["receipts_bn"], color="#2ca02c", linewidth=1.2)
     shade_downturns(axes[3], catalog)
     axes[3].set_ylabel("Federal tax receipts (bn $)", fontsize=9)
     axes[3].grid(True, alpha=0.3, linestyle="--")
-    axes[3].legend(handles=[line_fred],
+    axes[3].legend(handles=[line_tax],
                    labels=["FRED W006RC1Q027SBEA (SAAR ÷ 12, seasonally adj.)"],
                    fontsize=8, loc="upper left")
 
@@ -145,11 +141,11 @@ def plot_event_study(raw: pd.DataFrame) -> None:
     fig.suptitle("Event Study: Average Change After S&P 500 Downturn Start",
                  fontsize=13, fontweight="bold")
 
-    events = raw["event"].unique()
+    events = raw["name"].unique()
     lags   = sorted(raw["lag"].unique())
 
     for event in events:
-        sub = raw[raw["event"] == event].set_index("lag").reindex(lags)
+        sub = raw[raw["name"] == event].set_index("lag").reindex(lags)
         ax_u.plot(lags, sub["unemp_change"], color="gray",  alpha=0.3, linewidth=0.8)
         ax_t.plot(lags, sub["tax_change"],   color="gray",  alpha=0.3, linewidth=0.8)
 
@@ -170,8 +166,8 @@ def plot_event_study(raw: pd.DataFrame) -> None:
 
     ax_u.set_title("Unemployment rate change (pp vs baseline)")
     ax_u.set_ylabel("Percentage-point change")
-    ax_t.set_title("Tax receipts change (bn $ vs baseline)")
-    ax_t.set_ylabel("Change in bn $")
+    ax_t.set_title("Tax receipts change (% vs baseline)")
+    ax_t.set_ylabel("% change")
 
     fig.tight_layout()
     fig.savefig(FIGURES / "event_study.png", dpi=150)
@@ -179,13 +175,14 @@ def plot_event_study(raw: pd.DataFrame) -> None:
     print("  Saved event_study.png")
 
 
+# ── plot 3: per-named-event lag analysis ──────────────────────────────────────
 
 PALETTE = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
            "#edc948", "#b07aa1", "#ff9da7", "#9c755f"]
 
 def plot_named_event_lags(named: pd.DataFrame) -> None:
-    events = sorted(named["event"].unique(),
-                    key=lambda e: named[named["event"] == e]["lag"].count(), reverse=True)
+    events = sorted(named["name"].unique(),
+                    key=lambda e: named[named["name"] == e]["lag"].count(), reverse=True)
     colors = {e: PALETTE[i % len(PALETTE)] for i, e in enumerate(events)}
 
     fig, (ax_u, ax_t) = plt.subplots(1, 2, figsize=(14, 5))
@@ -197,7 +194,7 @@ def plot_named_event_lags(named: pd.DataFrame) -> None:
 
     for event in events:
         color = colors[event]
-        sub = named[named["event"] == event].set_index("lag").reindex(lags)
+        sub = named[named["name"] == event].set_index("lag").reindex(lags)
         ax_u.plot(lags, sub["unemp_change"], color=color, linewidth=2,
                   marker="o", markersize=5, label=event)
         ax_t.plot(lags, sub["tax_change"],   color=color, linewidth=2,
@@ -214,13 +211,14 @@ def plot_named_event_lags(named: pd.DataFrame) -> None:
 
     ax_u.set_title("Unemployment rate change (pp vs baseline)")
     ax_u.set_ylabel("Percentage-point change")
-    ax_t.set_title("Tax receipts change (bn $ vs baseline)")
-    ax_t.set_ylabel("Change in bn $")
+    ax_t.set_title("Tax receipts change (% vs baseline)")
+    ax_t.set_ylabel("% change")
 
     fig.tight_layout()
     fig.savefig(FIGURES / "named_event_lags.png", dpi=150)
     plt.close()
     print("  Saved named_event_lags.png")
+
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
@@ -228,13 +226,11 @@ def run() -> None:
     FIGURES.mkdir(parents=True, exist_ok=True)
 
     print("Loading data...")
-    df           = load_main()
-    raw          = load_raw_events()
-    named        = load_named_events()
-    tax          = load_tax_sources()
-    fred_unemp   = load_fred_unrate()
-    friend_sp500 = load_friend_sp500()
-    catalog      = load_catalog()
+    df         = load_main()
+    raw        = load_raw_events()
+    named      = load_named_events()
+    fred_unemp = load_fred_unrate()
+    catalog    = load_catalog()
 
     if not catalog.empty:
         print("\nDetected downturns (sorted by % drop):")
@@ -242,7 +238,7 @@ def run() -> None:
               .to_string(index=False))
 
     print("\nGenerating plots...")
-    plot_time_series(df, tax, fred_unemp, catalog)
+    plot_time_series(df, fred_unemp, catalog)
     plot_event_study(raw)
     plot_named_event_lags(named)
 

@@ -6,46 +6,59 @@ What this script does:
   1. Loads S&P 500, unemployment, and tax revenue from CSV / SQLite
   2. Aligns everything to a common monthly index
   3. Flags named downturn events
-  4. Outputs data/processed/merged_monthly_vs.csv
+  4. Outputs data/processed/merged_monthly.csv
 
 Usage:
     python vs-sandbox/build_dataset.py
 """
 
+import sqlite3
 import pandas as pd
 from pathlib import Path
 
 
-SHILLER_CSV       = Path(__file__).resolve().parents[1] / "data" / "raw" / "github_sp500_daily.csv"
-FRED_UNRATE_CSV   = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
-FRED_TAX_CSV      = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_w006rc1q027sbea.csv"
-PROCESSED_DIR     = Path(__file__).resolve().parents[1] / "data" / "processed"
-OUTPUT_PATH       = PROCESSED_DIR / "merged_monthly_vs.csv"
+DB_PATH       = Path(__file__).resolve().parents[1] / "data" / "raw" / "market_data.db"
+PROCESSED_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
+OUTPUT_PATH   = PROCESSED_DIR / "merged_monthly.csv"
 
 
 # ── load ─────────────────────────────────────────────────────────────────────
 
+def _get_conn() -> sqlite3.Connection:
+    if not DB_PATH.exists():
+        raise FileNotFoundError(
+            f"Database not found at {DB_PATH}. Run fetch_prepare_pipeline.py first."
+        )
+    return sqlite3.connect(DB_PATH)
+
+
 def load_sp500() -> pd.DataFrame:
-    """Load S&P 500 from Shiller historical CSV (1871–present)."""
-    df = pd.read_csv(SHILLER_CSV, parse_dates=["date"], index_col="date")
+    """Load S&P 500 monthly close from SQLite."""
+    conn = _get_conn()
+    df = pd.read_sql("SELECT date, close FROM sp500 ORDER BY date", conn, parse_dates=["date"], index_col="date")
+    conn.close()
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     return df[["close"]].sort_index()
 
 
 def load_unemployment() -> pd.DataFrame:
-    """Load FRED UNRATE from CSV (1948–present)."""
-    df = pd.read_csv(FRED_UNRATE_CSV, parse_dates=["date"], index_col="date")
+    """Load FRED UNRATE from SQLite."""
+    conn = _get_conn()
+    df = pd.read_sql("SELECT date, rate AS unemployment_rate FROM unemployment ORDER BY date", conn, parse_dates=["date"], index_col="date")
+    conn.close()
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
-    return df.rename(columns={"UNRATE": "unemployment_rate"})
+    return df
 
 
 def load_tax() -> pd.DataFrame:
-    """Load FRED W006RC1Q027SBEA from CSV (quarterly SAAR, 1947–present).
-    Divides by 12 for monthly equivalent, forward-fills to monthly frequency.
-    """
-    df = pd.read_csv(FRED_TAX_CSV, parse_dates=["date"], index_col="date")
+    """Load FRED quarterly tax from SQLite, divide by 12, forward-fill to monthly."""
+    conn = _get_conn()
+    df = pd.read_sql(
+        "SELECT date, receipts_bn FROM tax_revenue WHERE source='FRED_quarterly' ORDER BY date",
+        conn, parse_dates=["date"], index_col="date",
+    )
+    conn.close()
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
-    df = df.rename(columns={"W006RC1Q027SBEA": "receipts_bn"}).sort_index()
     df["receipts_bn"] = df["receipts_bn"] / 12
     df = df.resample("MS").ffill()
     return df

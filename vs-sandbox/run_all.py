@@ -1,72 +1,77 @@
 """
-run_all.py — full pipeline: ingest → build dataset → analyse → visualise.
+run_all.py — full pipeline: ingest → build dataset → analyse → visualise + dashboard
 
 Usage:
     python vs-sandbox/run_all.py
 """
 from pathlib import Path
-from ingest_tax_fred import load_env
-load_env(Path(__file__).resolve().parents[1])  # must be before os.getenv calls
+from fetch_prepare_pipeline import run_pipeline, load_env_file
 
-import os
 import subprocess
 import sys
 import tkinter as tk
 from tkinter import messagebox
 from db import initialise_db
-from ingest_sp500 import fetch_sp500, store_sp500
-from ingest_unemployment import fetch_unemployment, store_unemployment
-from ingest_tax_revenue import fetch_tax_revenue, store_tax_revenue
-from ingest_tax_fred import fetch_tax_fred, store_tax_fred
 from build_dataset import build_dataset
 from analyze_lags import run as run_analysis
 from visualize import run as run_visualize
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 if __name__ == "__main__":
+    load_env_file(PROJECT_ROOT)
+
     print("=== Initialising database ===")
     initialise_db()
 
-    print("\n=== S&P 500 ===")
-    store_sp500(fetch_sp500())
-
-    print("\n=== Unemployment (BLS) ===")
-    store_unemployment(fetch_unemployment(api_key=os.getenv("BLS_API_KEY")))
-
-    print("\n=== Tax revenue (FRED, 1947–present) ===")
+    print("\n=== Fetching data & writing to SQLite ===")
     try:
-        store_tax_fred(fetch_tax_fred(api_key=os.getenv("FRED_API_KEY", "")))
+        run_pipeline(
+            project_root=PROJECT_ROOT,
+            unrate_series="UNRATE",
+            tax_series="W006RC1Q027SBEA",
+            downturn_threshold=-0.05,
+            wb_indicator=None,
+        )
     except Exception as e:
-        print(f"  WARNING: FRED tax ingest failed ({e}). Skipping — existing DB data will be used.")
-
-    print("\n=== Tax revenue (Treasury MTS, 2015–present) ===")
-    store_tax_revenue(fetch_tax_revenue())
+        print(f"  WARNING: ingest failed ({e}). Existing DB data will be used.")
 
     print("\n=== Building dataset ===")
-    root = tk.Tk()
-    root.withdraw()
-    use_spark = messagebox.askyesno(
-        "Pipeline configuration",
-        "Use Apache Spark for the ETL build step?\n\n"
-        "⚠️  Spark has a ~30s JVM startup and is less efficient\n"
-        "for this dataset size (< 1000 rows).\n\n"
-        "Yes = PySpark  (outputs Parquet)\n"
-        "No  = Pandas   (outputs CSV, faster)"
-    )
-    root.destroy()
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        use_spark = messagebox.askyesno(
+            "Pipeline configuration",
+            "Use Apache Spark for the ETL build step?\n\n"
+            "⚠️  Spark has a ~30s JVM startup and is less efficient\n"
+            "for this dataset size (< 1000 rows).\n\n"
+            "Yes = PySpark  (outputs Parquet)\n"
+            "No  = Pandas   (outputs CSV, faster)"
+        )
+        root.destroy()
 
-    if use_spark:
-        from build_dataset_spark import build_dataset as build_spark
-        build_spark()
-        analysis_path = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly_vs.parquet"
-    else:
-        build_dataset()
-        analysis_path = None  # uses default CSV path
+        if use_spark:
+            from build_dataset_spark import build_dataset as build_spark
+            build_spark()
+            analysis_path = PROJECT_ROOT / "data" / "processed" / "merged_monthly.parquet"
+        else:
+            build_dataset()
+            analysis_path = None
+    except Exception as e:
+        print(f"  WARNING: build dataset failed ({e}). Skipping lag analysis and visualisations.")
+        analysis_path = None
 
     print("\n=== Lag analysis ===")
-    run_analysis(data_path=analysis_path)
+    try:
+        run_analysis(data_path=analysis_path)
+    except Exception as e:
+        print(f"  WARNING: lag analysis failed ({e}).")
 
     print("\n=== Visualisations ===")
-    run_visualize()
+    try:
+        run_visualize()
+    except Exception as e:
+        print(f"  WARNING: visualisations failed ({e}).")
 
     print("\nPipeline complete.")
 
