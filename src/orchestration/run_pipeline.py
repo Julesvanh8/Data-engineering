@@ -26,6 +26,8 @@ ANALYZE_SCRIPT = PROJECT_ROOT / "src" / "02_analysis" / "analyze_lags.py"
 VISUALIZE_SCRIPT = PROJECT_ROOT / "src" / "02_analysis" / "visualize.py"
 DASHBOARD_SCRIPT = PROJECT_ROOT / "src" / "03_dashboard" / "dashboard.py"
 
+DBT_EXE = str(Path(sys.executable).parent / ("dbt.exe" if sys.platform == "win32" else "dbt"))
+
 
 def print_section(title: str, char: str = "="):
     """Print a formatted section header."""
@@ -90,7 +92,7 @@ def write_dbt_profiles() -> Path:
 """
     profiles_path = DBT_PROJECT / "profiles.yml"
     profiles_path.write_text(content)
-    print(f"  ✍  Wrote dbt profiles.yml → {profiles_path}")
+    print(f"Wrote dbt profiles.yml → {profiles_path}")
     return DBT_PROJECT
 
 
@@ -126,7 +128,7 @@ def main():
         print_section("PHASE 2: DBT TRANSFORMATIONS", "-")
         profiles_dir = write_dbt_profiles()
         success = run_command(
-            ["dbt", "run", "--profiles-dir", str(profiles_dir)],
+            [DBT_EXE, "run", "--profiles-dir", str(profiles_dir)],
             "Running DBT models (staging → intermediate → marts)",
             cwd=DBT_PROJECT
         )
@@ -137,7 +139,7 @@ def main():
         # Run DBT tests
         print()
         run_command(
-            ["dbt", "test", "--profiles-dir", str(profiles_dir)],
+            [DBT_EXE, "test", "--profiles-dir", str(profiles_dir)],
             "Running DBT tests",
             cwd=DBT_PROJECT
         )
@@ -167,11 +169,14 @@ def main():
     else:
         print_section("PHASE 3: ANALYSIS & VISUALIZATION (SKIPPED)", "-")
     
-    # Phase 4: Dashboard Instructions
+    # Phase 4: Dashboard
     print_section("PHASE 4: INTERACTIVE DASHBOARD", "-")
-    print("To launch the interactive Streamlit dashboard, run:")
-    print(f"\n  streamlit run {DASHBOARD_SCRIPT.relative_to(PROJECT_ROOT)}\n")
-    print("The dashboard will open in your browser at http://localhost:8501")
+    print("▶ Launching Streamlit dashboard in the background...")
+    subprocess.Popen(
+        ["streamlit", "run", str(DASHBOARD_SCRIPT)],
+        cwd=PROJECT_ROOT,
+    )
+    print("  ✅ Dashboard started — opening at http://localhost:8501\n")
     
     # Summary
     end_time = datetime.now()
