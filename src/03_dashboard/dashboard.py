@@ -2,7 +2,7 @@
 dashboard.py — interactive Streamlit + Plotly dashboard for the lag analysis.
 
 Usage:
-    streamlit run vs-sandbox/dashboard.py
+    streamlit run src/03_dashboard/dashboard.py
 """
 
 import numpy as np
@@ -11,13 +11,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
+import sqlite3
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
-ROOT        = Path(__file__).resolve().parents[1]
+ROOT        = Path(__file__).resolve().parents[2]
 PROCESSED   = ROOT / "data" / "processed"
 
-MAIN_CSV    = PROCESSED / "merged_monthly.csv"
+DB_PATH     = ROOT / "data" / "raw" / "main_marts.db"
 EVENTS_CSV  = PROCESSED / "events_combined.csv"
 NAMED_COLORS = {
     "Dot-com crash":           "rgba(255, 180, 180, 0.35)",
@@ -30,7 +31,15 @@ OTHER_COLOR = "rgba(210, 210, 210, 0.35)"
 
 @st.cache_data
 def load_main() -> pd.DataFrame:
-    df = pd.read_csv(MAIN_CSV, parse_dates=["date"], index_col="date")
+    """Load data from DBT mart."""
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql(
+        "SELECT * FROM fct_combined_monthly ORDER BY date",
+        conn,
+        parse_dates=["date"],
+        index_col="date"
+    )
+    conn.close()
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     return df
 
@@ -104,8 +113,8 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
 
     # S&P 500
     fig.add_trace(go.Scatter(
-        x=df.index, y=df["close"],
-        name="S&P 500 (Shiller)", line=dict(color="#1f77b4", width=1.2),
+        x=df.index, y=df["sp500_close"],
+        name="S&P 500", line=dict(color="#1f77b4", width=1.2),
     ), row=1, col=1)
     if shade_sp500:
         add_period_shapes(fig, catalog, "sp500_start", "sp500_trough", row=1, label_events=True)
@@ -113,7 +122,7 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
     log_row = 2
     if show_log:
         fig.add_trace(go.Scatter(
-            x=df.index, y=np.log(df["close"]),
+            x=df.index, y=np.log(df["sp500_close"]),
             name="log(S&P 500)", line=dict(color="#1f77b4", width=1.2, dash="dot"),
             showlegend=True,
         ), row=2, col=1)
@@ -137,7 +146,7 @@ def page_time_series(df: pd.DataFrame, catalog: pd.DataFrame):
 
     # Tax receipts
     fig.add_trace(go.Scatter(
-        x=df.index, y=df["receipts_bn"],
+        x=df.index, y=df["federal_tax_revenue"],
         name="Federal tax receipts (bn $)", line=dict(color="#2ca02c", width=1.2),
     ), row=tax_row, col=1)
     if shade_sp500:
@@ -515,7 +524,7 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
     )
 
     fig.add_trace(go.Scatter(
-        x=w.index, y=w["close"],
+        x=w.index, y=w["sp500_close"],
         name="S&P 500", line=dict(color="#1f77b4", width=1.5),
     ), row=1, col=1)
 
@@ -525,7 +534,7 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
     ), row=2, col=1)
 
     fig.add_trace(go.Scatter(
-        x=w.index, y=w["receipts_bn"],
+        x=w.index, y=w["federal_tax_revenue"],
         name="Tax receipts", line=dict(color="#2ca02c", width=1.5),
     ), row=3, col=1)
 
@@ -539,7 +548,7 @@ def page_event_deepdive(df: pd.DataFrame, catalog: pd.DataFrame) -> None:
 
     if start_date in w.index:
         fig.add_annotation(
-            x=start_date, y=df.loc[start_date, "close"],
+            x=start_date, y=df.loc[start_date, "sp500_close"],
             text="Downturn start", showarrow=True, arrowhead=2,
             ax=30, ay=-40, font=dict(size=10), row=1, col=1,
         )

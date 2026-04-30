@@ -1,0 +1,50 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Raw data tables in SQLite database
+    schema: main
+    tables:
+      - name: sp500
+        description: S&P 500 monthly closing prices and percent changes
+        columns:
+          - name: date
+            description: Month start date
+            tests:
+              - not_null
+              - unique
+          - name: close
+            description: Month-end closing price
+            tests:
+              - not_null
+          - name: pct_change
+            description: Month-over-month percentage change
+      
+      - name: unemployment
+        description: U.S. unemployment rate (UNRATE) from FRED
+        columns:
+          - name: date
+            description: Month start date
+            tests:
+              - not_null
+              - unique
+          - name: rate
+            description: Unemployment rate as percentage
+            tests:
+              - not_null
+      
+      - name: tax_revenue
+        description: Federal income tax revenue from FRED (quarterly SAAR)
+        columns:
+          - name: date
+            description: Quarter start date
+            tests:
+              - not_null
+          - name: receipts_bn
+            description: Tax receipts in billions (SAAR)
+            tests:
+              - not_null
+          - name: source
+            description: Data source identifier
+            tests:
+              - not_null

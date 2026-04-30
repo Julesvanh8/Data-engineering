@@ -17,9 +17,11 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from scipy import stats
+import sqlite3
 
-DATA_PATH  = Path(__file__).resolve().parents[1] / "data" / "processed" / "merged_monthly.csv"
-EVENTS_OUT = Path(__file__).resolve().parents[1] / "data" / "processed" / "events_combined.csv"
+# Use DBT mart instead of CSV
+DB_PATH = Path(__file__).resolve().parents[2] / "data" / "raw" / "main_marts.db"
+EVENTS_OUT = Path(__file__).resolve().parents[2] / "data" / "processed" / "events_combined.csv"
 
 MAX_LAG                 = 23
 SP500_THRESHOLD         = -19.0  # % fall from running all-time high to trigger a bear-market event
@@ -264,9 +266,9 @@ def build_events(df: pd.DataFrame) -> pd.DataFrame:
     Returns long-format DataFrame: one row per event × lag (1..MAX_LAG).
     Catalog columns (label through duration_trough_tax) are repeated per lag row.
     """
-    close  = df["close"].dropna()
+    close  = df["sp500_close"].dropna()
     unemp  = df["unemployment_rate"].dropna()
-    fedtax = df["receipts_bn"].dropna()
+    fedtax = df["federal_tax_revenue"].dropna()
 
     periods_sp500    = _find_periods_fall(close, SP500_THRESHOLD, 5)
     event_meta_sp500 = _build_event_metadata(periods_sp500, close, NAMED_EVENTS, direction="down")
@@ -311,7 +313,7 @@ def build_events(df: pd.DataFrame) -> pd.DataFrame:
         base_w = df[(df.index >= sp_start - pd.DateOffset(months=BASELINE_MONTHS))
                     & (df.index < sp_start)]
         base_u = base_w["unemployment_rate"].mean()
-        base_t = base_w["receipts_bn"].mean()
+        base_t = base_w["federal_tax_revenue"].mean()
 
         for lag in range(1, MAX_LAG + 1):
             target = (sp_start + pd.DateOffset(months=lag)).to_period("M").to_timestamp()
@@ -321,7 +323,7 @@ def build_events(df: pd.DataFrame) -> pd.DataFrame:
             row = dict(catalog_meta)
             row["lag"]          = lag
             row["unemp_change"] = obs["unemployment_rate"] - base_u if pd.notna(base_u) else None
-            row["tax_change"]   = (obs["receipts_bn"] - base_t) / base_t * 100 \
+            row["tax_change"]   = (obs["federal_tax_revenue"] - base_t) / base_t * 100 \
                                   if (pd.notna(base_t) and base_t > 0) else None
             rows.append(row)
 
@@ -384,13 +386,20 @@ def print_summary(agg: pd.DataFrame) -> None:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-def run(data_path=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    path = Path(data_path) if data_path else DATA_PATH
-    print("Loading data...")
-    if path.suffix == ".parquet" or path.is_dir():
-        df = pd.read_parquet(path).set_index("date")
-    else:
-        df = pd.read_csv(path, parse_dates=["date"], index_col="date")
+def run(db_path=None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run event analysis using DBT mart data."""
+    path = Path(db_path) if db_path else DB_PATH
+    
+    print("Loading data from DBT mart...")
+    conn = sqlite3.connect(path)
+    df = pd.read_sql(
+        "SELECT * FROM fct_combined_monthly ORDER BY date",
+        conn,
+        parse_dates=["date"],
+        index_col="date"
+    )
+    conn.close()
+    
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     print(f"  {len(df)} rows  ({df.index.min().date()} → {df.index.max().date()})")
 

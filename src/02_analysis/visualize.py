@@ -17,14 +17,15 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from pathlib import Path
+import sqlite3
 
-PROCESSED = Path(__file__).resolve().parents[1] / "data" / "processed"
-FIGURES   = Path(__file__).resolve().parents[1] / "outputs" / "figures"
+PROCESSED = Path(__file__).resolve().parents[2] / "data" / "processed"
+FIGURES   = Path(__file__).resolve().parents[2] / "outputs" / "figures"
 
-MAIN_CSV   = PROCESSED / "merged_monthly.csv"
+DB_PATH    = Path(__file__).resolve().parents[2] / "data" / "raw" / "main_marts.db"
 EVENTS_CSV = PROCESSED / "events_combined.csv"
 
-FRED_UNRATE_CSV = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
+FRED_UNRATE_CSV = Path(__file__).resolve().parents[2] / "data" / "raw" / "fred_unrate.csv"
 
 NAMED_EVENT_NAMES = {"Dot-com crash", "Global Financial Crisis", "COVID crash"}
 
@@ -39,7 +40,15 @@ OTHER_COLOR = "#e0e0e0"
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def load_main() -> pd.DataFrame:
-    df = pd.read_csv(MAIN_CSV, parse_dates=["date"], index_col="date")
+    """Load data from DBT mart."""
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql(
+        "SELECT * FROM fct_combined_monthly ORDER BY date",
+        conn,
+        parse_dates=["date"],
+        index_col="date"
+    )
+    conn.close()
     df.index = pd.to_datetime(df.index).to_period("M").to_timestamp()
     return df
 
@@ -92,7 +101,7 @@ def plot_time_series(df: pd.DataFrame, fred_unrate: pd.Series,
                  fontsize=14, fontweight="bold")
 
     # Panel 1: S&P 500
-    line_sp, = axes[0].plot(df.index, df["close"], color="#1f77b4", linewidth=1.2)
+    line_sp, = axes[0].plot(df.index, df["sp500_close"], color="#1f77b4", linewidth=1.2)
     shade_downturns(axes[0], catalog)
     axes[0].set_ylabel("S&P 500 (close)", fontsize=9)
     axes[0].grid(True, alpha=0.3, linestyle="--")
@@ -103,7 +112,7 @@ def plot_time_series(df: pd.DataFrame, fred_unrate: pd.Series,
                    fontsize=8, loc="upper left")
 
     # Panel 2: S&P 500 log scale
-    line_log, = axes[1].plot(df.index, np.log(df["close"]), color="#1f77b4", linewidth=1.2)
+    line_log, = axes[1].plot(df.index, np.log(df["sp500_close"]), color="#1f77b4", linewidth=1.2)
     shade_downturns(axes[1], catalog)
     axes[1].set_ylabel("log(S&P 500)", fontsize=9)
     axes[1].grid(True, alpha=0.3, linestyle="--")
@@ -119,7 +128,7 @@ def plot_time_series(df: pd.DataFrame, fred_unrate: pd.Series,
                    fontsize=8, loc="upper left")
 
     # Panel 4: Tax receipts
-    line_tax, = axes[3].plot(df.index, df["receipts_bn"], color="#2ca02c", linewidth=1.2)
+    line_tax, = axes[3].plot(df.index, df["federal_tax_revenue"], color="#2ca02c", linewidth=1.2)
     shade_downturns(axes[3], catalog)
     axes[3].set_ylabel("Federal tax receipts (bn $)", fontsize=9)
     axes[3].grid(True, alpha=0.3, linestyle="--")
