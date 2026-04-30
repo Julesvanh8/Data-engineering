@@ -46,13 +46,35 @@ def load_main() -> pd.DataFrame:
 @st.cache_data
 def load_raw_events() -> pd.DataFrame:
     if not EVENTS_CSV.exists():
-        return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
+        st.info("📊 Generating event study data for the first time...")
+        try:
+            import subprocess
+            import sys
+            analysis_script = ROOT / "src" / "02_analysis" / "analyze_lags.py"
+            result = subprocess.run(
+                [sys.executable, str(analysis_script)],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                st.success("✅ Event study data generated successfully!")
+            else:
+                st.error(f"❌ Failed to generate data: {result.stderr}")
+                return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
+        except Exception as e:
+            st.error(f"❌ Error running analysis: {e}")
+            return pd.DataFrame(columns=["name", "lag", "unemp_change", "tax_change"])
     return pd.read_csv(EVENTS_CSV)
 
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
     if not EVENTS_CSV.exists():
-        return pd.DataFrame(columns=["name", "sp500_start", "sp500_trough", "sp500_pct_drop"])
+        st.warning("⚠️ Event catalog not available yet. Generating now...")
+        load_raw_events()  # This will trigger the generation
+        if not EVENTS_CSV.exists():
+            return pd.DataFrame(columns=["name", "sp500_start", "sp500_trough", "sp500_pct_drop"])
     df = pd.read_csv(EVENTS_CSV, parse_dates=["sp500_start", "sp500_trough",
                                                "unemp_event_start", "unemp_peak_date",
                                                "tax_event_start",   "tax_trough_date"])
