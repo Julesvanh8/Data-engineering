@@ -12,6 +12,52 @@ from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
 import sqlite3
+import hashlib
+
+# ── authentication ─────────────────────────────────────────────────────────────
+
+def check_password():
+    """Returns `True` if the user has entered the correct password."""
+    
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        entered_password = st.session_state["password"]
+        
+        # Get password from secrets (Streamlit Cloud) or use default for local
+        try:
+            correct_password = st.secrets["dashboard_password"]
+        except (KeyError, FileNotFoundError):
+            # For local development, use a default password
+            correct_password = "demo123"
+            st.warning("⚠️ Using default password (demo123). Configure secrets for production!")
+        
+        # Hash the entered password for security
+        entered_hash = hashlib.sha256(entered_password.encode()).hexdigest()
+        correct_hash = hashlib.sha256(correct_password.encode()).hexdigest()
+        
+        if entered_hash == correct_hash:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store the actual password
+        else:
+            st.session_state["password_correct"] = False
+
+    # Return True if password is already validated
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Show password input
+    st.title("🔐 Dashboard Login")
+    st.text_input(
+        "Enter password to access the dashboard:",
+        type="password",
+        on_change=password_entered,
+        key="password"
+    )
+    
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        st.error("❌ Incorrect password. Please try again.")
+    
+    return False
 
 # ── paths ─────────────────────────────────────────────────────────────────────
 
@@ -607,6 +653,11 @@ def main():
         page_icon="📈",
         layout="wide",
     )
+    
+    # Check password first
+    if not check_password():
+        st.stop()  # Stop execution if password is incorrect
+    
     st.title("How Long After a Stock Market Downturn Do Unemployment and Tax Revenues Change?")
     st.caption(
         "Research question: measuring the lag between U.S. S&P 500 downturns and changes "
