@@ -1,140 +1,276 @@
 """
-build_dataset_spark.py — PySpark version of build_dataset.py.
+spark_build_dataset.py — PySpark version of the monthly dataset builder.
 
-Uses PySpark for the ETL pipeline:
-  1. Loads S&P 500, unemployment, and tax revenue from CSV
-  2. Forward-fills quarterly tax data to monthly using a window function
-  3. Joins everything to a common monthly index
-  4. Derives computed columns (pct_change, pp_change_unrate, pct_change_receipts)
-     using Spark window functions
-  5. Outputs data/processed/merged_monthly.parquet
-
-Usage:
-    python vs-sandbox/build_dataset_spark.py
-    (or called via run_all.py when user selects Spark)
+Uses PySpark for the ETL build step:
+  1. Loads S&P 500, unemployment, and federal tax revenue from SQLite.
+  2. Harmonises all series to a monthly date index.
+  3. Forward-fills quarterly tax revenue to monthly frequency.
+  4. Joins the sources into one dataset.
+  5. Creates the change variables used in the lag analysis:
+       - pct_change
+       - pp_change_unrate
+       - pct_change_receipts
+  6. Saves the final dataset as:
+       data/processed/merged_monthly.csv
 """
 
-import os
-from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 from pathlib import Path
+import sqlite3
+import pandas as pd
+import sys
+import os
 
-_HADOOP_HOME = r"C:\Users\schil100\Documents\hadoop"
-_HADOOP_BIN  = _HADOOP_HOME + r"\bin"
-os.environ["HADOOP_HOME"] = _HADOOP_HOME
-os.environ["PATH"] = _HADOOP_BIN + os.pathsep + os.environ.get("PATH", "")
-
-_PYTHON = str(Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "python.exe")
-os.environ["PYSPARK_PYTHON"]        = _PYTHON
-os.environ["PYSPARK_DRIVER_PYTHON"] = _PYTHON
-
-
-SHILLER_CSV     = Path(__file__).resolve().parents[1] / "data" / "raw" / "github_sp500_daily.csv"
-FRED_UNRATE_CSV = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_unrate.csv"
-FRED_TAX_CSV    = Path(__file__).resolve().parents[1] / "data" / "raw" / "fred_w006rc1q027sbea.csv"
-PROCESSED_DIR   = Path(__file__).resolve().parents[1] / "data" / "processed"
-OUTPUT_PATH     = PROCESSED_DIR / "merged_monthly.parquet"
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, to_date, date_trunc, last
+from pyspark.sql.window import Window
 
 
-def build_dataset() -> None:
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+os.environ["PYSPARK_PYTHON"] = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+RAW_DIR = PROJECT_ROOT / "data" / "raw"
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+
+DB_PATH = RAW_DIR / "market_data.db"
+OUTPUT_FILE = PROCESSED_DIR / "merged_monthly.csv"
+
+
+def load_table_from_sqlite(query: str) -> pd.DataFrame:
+    """
+    Load a SQLite query result into a pandas DataFrame.
+    Spark does not read SQLite directly without a JDBC driver,
+    so we read from SQLite with pandas and then convert to Spark.
+    """
+    if not DB_PATH.exists():
+        raise FileNotFoundError(
+            f"Database not found at {DB_PATH}. Run the ingestion pipeline first."
+        )
+
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    return df
+
+
+def main():
     spark = (
         SparkSession.builder
-        .appName("build_dataset")
+        .appName("BuildMonthlyDatasetWithSpark")
         .master("local[*]")
         .config("spark.sql.shuffle.partitions", "4")
-        .config("mapreduce.fileoutputcommitter.algorithm.version", "2")
         .getOrCreate()
     )
+
     spark.sparkContext.setLogLevel("ERROR")
 
-    try:
-        print("Loading sources...")
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-        sp500 = (
-            spark.read.csv(str(SHILLER_CSV), header=True, inferSchema=True)
-            .withColumn("date", F.trunc(F.to_date("date"), "month"))
-            .select(F.col("date"), F.col("close").cast("double"))
-            .orderBy("date")
+    print("Using SQLite database:")
+    print("Database:", DB_PATH)
+    print("Output:", OUTPUT_FILE)
+
+    # 1. Load data from SQLite
+    sp500_pd = load_table_from_sqlite("""
+        SELECT date, close
+        FROM sp500
+        ORDER BY date
+    """)
+
+    unrate_pd = load_table_from_sqlite("""
+        SELECT date, rate AS unemployment_rate
+        FROM unemployment
+        ORDER BY date
+    """)
+
+    tax_pd = load_table_from_sqlite("""
+        SELECT date, receipts_bn
+        FROM tax_revenue
+        WHERE source = 'FRED_quarterly'
+        ORDER BY date
+    """)
+
+    print("Rows loaded from SQLite:")
+    print("S&P 500:", len(sp500_pd))
+    print("Unemployment:", len(unrate_pd))
+    print("Tax:", len(tax_pd))
+
+    # 2. Convert pandas DataFrames to Spark DataFrames
+    sp500 = spark.createDataFrame(sp500_pd)
+    unrate = spark.createDataFrame(unrate_pd)
+    tax = spark.createDataFrame(tax_pd)
+
+    print("S&P 500 columns:", sp500.columns)
+    print("Unemployment columns:", unrate.columns)
+    print("Tax columns:", tax.columns)
+
+    # 3. Convert all dates to month-start
+    sp500 = (
+        sp500
+        .withColumn("date", to_date(col("date")))
+        .withColumn("month", date_trunc("month", col("date")).cast("date"))
+    )
+
+    unrate = (
+        unrate
+        .withColumn("date", to_date(col("date")))
+        .withColumn("month", date_trunc("month", col("date")).cast("date"))
+    )
+
+    tax = (
+        tax
+        .withColumn("date", to_date(col("date")))
+        .withColumn("month", date_trunc("month", col("date")).cast("date"))
+    )
+
+    # 4. S&P 500 at monthly level
+    sp500_monthly = (
+        sp500
+        .groupBy("month")
+        .agg(
+            last("close", ignorenulls=True).alias("close")
         )
+        .orderBy("month")
+    )
 
-        unemp = (
-            spark.read.csv(str(FRED_UNRATE_CSV), header=True, inferSchema=True)
-            .withColumn("date", F.trunc(F.to_date("date"), "month"))
-            .withColumnRenamed("UNRATE", "unemployment_rate")
-            .select("date", F.col("unemployment_rate").cast("double"))
+    w_month = Window.orderBy("month")
+
+    sp500_monthly = sp500_monthly.withColumn(
+        "previous_close",
+        last("close", ignorenulls=True).over(w_month.rowsBetween(-1, -1))
+    )
+
+    sp500_monthly = sp500_monthly.withColumn(
+        "pct_change",
+        ((col("close") - col("previous_close")) / col("previous_close")) * 100
+    )
+
+    sp500_monthly = sp500_monthly.drop("previous_close")
+
+    # 5. Unemployment at monthly level
+    unrate_monthly = (
+        unrate
+        .groupBy("month")
+        .agg(
+            last("unemployment_rate", ignorenulls=True).alias("unemployment_rate")
         )
+        .orderBy("month")
+    )
 
-        tax_raw = (
-            spark.read.csv(str(FRED_TAX_CSV), header=True, inferSchema=True)
-            .withColumn("date", F.trunc(F.to_date("date"), "month"))
-            .withColumn("receipts_bn", F.col("W006RC1Q027SBEA").cast("double") / 12)
-            .select("date", "receipts_bn")
+    # 6. Tax revenue, quarterly to monthly with forward fill
+    tax_quarterly = (
+        tax
+        .groupBy("month")
+        .agg(
+            last("receipts_bn", ignorenulls=True).alias("receipts_bn")
         )
+        .orderBy("month")
+    )
 
-        # ── forward-fill quarterly tax to monthly frequency ──────────────────
-        bounds = tax_raw.agg(
-            F.min("date").alias("min_d"),
-            F.max("date").alias("max_d"),
-        ).collect()[0]
+    # FRED tax revenue is quarterly. We divide by 12 to create a monthly equivalent.
+    tax_quarterly = tax_quarterly.withColumn(
+        "receipts_bn",
+        col("receipts_bn") / 12
+    )
 
-        monthly_spine = spark.sql(f"""
-            SELECT explode(sequence(
-                date '{bounds["min_d"]}',
-                date '{bounds["max_d"]}',
-                interval 1 month
-            )) AS date
-        """)
+    monthly_index = sp500_monthly.select("month").distinct().orderBy("month")
 
-        w_ffill = Window.orderBy("date").rowsBetween(Window.unboundedPreceding, 0)
-        tax = (
-            monthly_spine
-            .join(tax_raw, on="date", how="left")
-            .withColumn("receipts_bn", F.last("receipts_bn", ignorenulls=True).over(w_ffill))
-            .filter(F.col("receipts_bn").isNotNull())
-        )
+    tax_monthly = (
+        monthly_index
+        .join(tax_quarterly, on="month", how="left")
+        .orderBy("month")
+    )
 
-        print(f"  S&P 500:       {sp500.count()} rows")
-        print(f"  Unemployment:  {unemp.count()} rows")
-        print(f"  Tax (monthly): {tax.count()} rows")
+    w_ffill = (
+        Window
+        .orderBy("month")
+        .rowsBetween(Window.unboundedPreceding, 0)
+    )
 
-        print("\nJoining sources...")
-        df = (
-            sp500
-            .join(unemp, on="date", how="left")
-            .join(tax,   on="date", how="left")
-            .filter(
-                F.col("unemployment_rate").isNotNull() &
-                F.col("receipts_bn").isNotNull()
-            )
-            .orderBy("date")
-        )
+    tax_monthly = tax_monthly.withColumn(
+        "receipts_bn",
+        last("receipts_bn", ignorenulls=True).over(w_ffill)
+    )
 
-        w = Window.orderBy("date")
-        df = (
-            df
-            .withColumn("pct_change",
-                (F.col("close") - F.lag("close", 1).over(w)) /
-                F.lag("close", 1).over(w) * 100)
-            .withColumn("pp_change_unrate",
-                F.col("unemployment_rate") - F.lag("unemployment_rate", 1).over(w))
-            .withColumn("pct_change_receipts",
-                (F.col("receipts_bn") - F.lag("receipts_bn", 1).over(w)) /
-                F.lag("receipts_bn", 1).over(w) * 100)
-        )
+    # 7. Join all datasets
+    merged = (
+        sp500_monthly
+        .join(unrate_monthly, on="month", how="inner")
+        .join(tax_monthly, on="month", how="inner")
+        .orderBy("month")
+    )
 
-        n          = df.count()
-        date_range = df.agg(F.min("date"), F.max("date")).collect()[0]
-        print(f"  Joined: {n} rows  ({date_range[0]} → {date_range[1]})")
+    merged = merged.withColumnRenamed("month", "date")
 
-        df.write.mode("overwrite").parquet(str(OUTPUT_PATH))
-        print(f"\nSaved to {OUTPUT_PATH}")
+    # 8. Create change variables
+    w_final = Window.orderBy("date")
 
-    finally:
-        spark.stop()
+    merged = merged.withColumn(
+        "previous_unemployment_rate",
+        last("unemployment_rate", ignorenulls=True).over(w_final.rowsBetween(-1, -1))
+    )
+
+    merged = merged.withColumn(
+        "previous_receipts_bn",
+        last("receipts_bn", ignorenulls=True).over(w_final.rowsBetween(-1, -1))
+    )
+
+    merged = merged.withColumn(
+        "pp_change_unrate",
+        col("unemployment_rate") - col("previous_unemployment_rate")
+    )
+
+    merged = merged.withColumn(
+        "pct_change_receipts",
+        ((col("receipts_bn") - col("previous_receipts_bn")) / col("previous_receipts_bn")) * 100
+    )
+
+    merged = merged.drop(
+        "previous_unemployment_rate",
+        "previous_receipts_bn"
+    )
+
+    # 9. Save as normal CSV
+    merged_pd = merged.toPandas()
+
+    merged_pd = merged_pd[[
+        "date",
+        "close",
+        "unemployment_rate",
+        "receipts_bn",
+        "pct_change",
+        "pp_change_unrate",
+        "pct_change_receipts",
+    ]]
+
+    merged_pd = merged_pd.dropna(subset=[
+        "close",
+        "unemployment_rate",
+        "receipts_bn",
+    ])
+
+    merged_pd["date"] = pd.to_datetime(merged_pd["date"])
+    merged_pd = merged_pd.sort_values("date")
+
+    if "date" not in merged_pd.columns:
+        raise ValueError(f"No date column before saving. Columns are: {merged_pd.columns.tolist()}")
+
+    print("Final output columns before saving:")
+    print(merged_pd.columns.tolist())
+
+    merged_pd.to_csv(OUTPUT_FILE, index=False)
+
+    print("Saved Spark-built dataset to:", OUTPUT_FILE)
+    print("Rows:", len(merged_pd))
+    print("Columns:", merged_pd.columns.tolist())
+    print(merged_pd.head())
+    print(merged_pd.tail())
+
+    spark.stop()
 
 
 if __name__ == "__main__":
-    build_dataset()
+    main()

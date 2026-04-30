@@ -13,6 +13,7 @@ MAIN_EVENTS = PROCESSED / "events_combined.csv"
 ROBUST_EVENTS = PROCESSED / "events_combined_robust.csv"
 
 OUTPUT_FILE = PROCESSED / "robustness_summary.csv"
+TIMING_OUTPUT_FILE = PROCESSED / "robustness_timing_summary.csv"
 
 
 IMPORTANT_EVENTS = [
@@ -68,6 +69,48 @@ def load_event_summary(path: Path, version: str) -> pd.DataFrame:
     return df
 
 
+def load_timing_summary(path: Path, version: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+
+    summary = (
+        df.groupby("lag")
+        .agg(
+            avg_unemp_change=("unemp_change", "mean"),
+            avg_tax_change=("tax_change", "mean"),
+            n_events=("name", "nunique"),
+        )
+        .reset_index()
+    )
+
+    unemp_positive = summary[summary["avg_unemp_change"] > 0]
+    tax_negative = summary[summary["avg_tax_change"] < 0]
+
+    return pd.DataFrame(
+        [
+            {
+                "version": version,
+                "n_events_total": df["name"].nunique(),
+                "unemp_first_positive_lag": (
+                    int(unemp_positive.iloc[0]["lag"])
+                    if not unemp_positive.empty
+                    else None
+                ),
+                "unemp_peak_lag": int(
+                    summary.loc[summary["avg_unemp_change"].idxmax(), "lag"]
+                ),
+                "tax_first_negative_lag": (
+                    int(tax_negative.iloc[0]["lag"])
+                    if not tax_negative.empty
+                    else None
+                ),
+                "tax_trough_lag": int(
+                    summary.loc[summary["avg_tax_change"].idxmin(), "lag"]
+                ),
+            }
+        ]
+    )
+
+
 # =========================
 # 3. Compare nominal vs real
 # =========================
@@ -110,11 +153,25 @@ def compare_robustness() -> pd.DataFrame:
     return comparison
 
 
+def compare_timing() -> pd.DataFrame:
+    nominal_timing = load_timing_summary(MAIN_EVENTS, "nominal")
+    real_timing = load_timing_summary(ROBUST_EVENTS, "real")
+
+    timing = pd.concat(
+        [nominal_timing, real_timing],
+        ignore_index=True,
+    )
+
+    timing.to_csv(TIMING_OUTPUT_FILE, index=False)
+
+    return timing
+
+
 # =========================
 # 4. Print readable conclusion
 # =========================
 
-def print_readable_summary(comparison: pd.DataFrame) -> None:
+def print_readable_summary(comparison: pd.DataFrame, timing: pd.DataFrame) -> None:
     print("\n" + "=" * 80)
     print("ROBUSTNESS CHECK: NOMINAL S&P 500 VS REAL S&P 500")
     print("=" * 80)
@@ -160,38 +217,55 @@ def print_readable_summary(comparison: pd.DataFrame) -> None:
 
         print()
 
-    print("2. Overall robustness interpretation")
+    print("2. Timing comparison")
+    print("-" * 80)
+    print(timing.to_string(index=False))
+
+    print("\n3. Overall robustness interpretation")
     print("-" * 80)
 
     important_detected = important["detected_in_both"].sum()
     total_important = len(IMPORTANT_EVENTS)
 
     both_all = comparison[comparison["detected_in_both"]]
-    nominal_only = comparison[~comparison["detected_in_both"] & comparison["sp500_start_nominal"].notna()]
-    real_only = comparison[~comparison["detected_in_both"] & comparison["sp500_start_real"].notna()]
+    nominal_only = comparison[
+        ~comparison["detected_in_both"]
+        & comparison["sp500_start_nominal"].notna()
+    ]
+    real_only = comparison[
+        ~comparison["detected_in_both"]
+        & comparison["sp500_start_real"].notna()
+    ]
 
     print(f"Important events detected in both versions: {important_detected}/{total_important}")
     print(f"Total events detected in both versions: {len(both_all)}")
     print(f"Events only in nominal version: {len(nominal_only)}")
     print(f"Events only in real version: {len(real_only)}")
 
+    nominal_row = timing[timing["version"] == "nominal"].iloc[0]
+    real_row = timing[timing["version"] == "real"].iloc[0]
+
+    unemp_peak_diff = real_row["unemp_peak_lag"] - nominal_row["unemp_peak_lag"]
+
     print("\nConclusion:")
 
-    if important_detected == total_important:
+    if important_detected == total_important and abs(unemp_peak_diff) <= 2:
         print(
             "The robustness check supports the main analysis. "
             "The three main historical downturns are detected both with nominal prices "
-            "and with inflation-adjusted real prices. This means the main event detection "
-            "is not only driven by nominal price movements."
+            "and with inflation-adjusted real prices. The average unemployment timing is also similar, "
+            "which suggests that the main results are not only driven by nominal price movements."
         )
     else:
         print(
-            "The robustness check is mixed. Some important events are not detected in both versions. "
-            "This means the results are partly sensitive to whether nominal or real S&P 500 prices are used."
+            "The robustness check is mixed. Some event detection or timing results differ between "
+            "the nominal and real-price versions. This suggests that the results are partly sensitive "
+            "to the choice between nominal and inflation-adjusted S&P 500 prices."
         )
 
-    print("\nSaved summary file:")
+    print("\nSaved files:")
     print(OUTPUT_FILE)
+    print(TIMING_OUTPUT_FILE)
     print("=" * 80 + "\n")
 
 
@@ -201,7 +275,8 @@ def print_readable_summary(comparison: pd.DataFrame) -> None:
 
 def main() -> None:
     comparison = compare_robustness()
-    print_readable_summary(comparison)
+    timing = compare_timing()
+    print_readable_summary(comparison, timing)
 
 
 if __name__ == "__main__":

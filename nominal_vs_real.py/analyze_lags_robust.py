@@ -1,14 +1,21 @@
 """
 analyze_lags_robust.py — robustness check for the event-study lag analysis.
 
-This script repeats Valerie's lag analysis using inflation-adjusted
+This script repeats the main lag analysis using inflation-adjusted
 S&P 500 real prices instead of nominal S&P 500 prices.
 
+Research question:
+    How long after a U.S. stock market downturn do unemployment and
+    federal income tax revenues change?
+
+Approach:
+    Event study — track average change vs pre-downturn baseline
+                  at each lag (1-MAX_LAG months) across all detected events.
+
 Inputs:
-    data/processed/merged_monthly_vs_robust.csv
+    data/processed/merged_monthly_robust.csv
 
 Outputs:
-    data/processed/lag_results_robust.csv
     data/processed/events_combined_robust.csv
 """
 
@@ -22,14 +29,7 @@ DATA_PATH = (
     Path(__file__).resolve().parents[1]
     / "data"
     / "processed"
-    / "merged_monthly_vs_robust.csv"
-)
-
-LAG_OUT = (
-    Path(__file__).resolve().parents[1]
-    / "data"
-    / "processed"
-    / "lag_results_robust.csv"
+    / "merged_monthly_robust.csv"
 )
 
 EVENTS_OUT = (
@@ -44,6 +44,7 @@ MAX_LAG = 23
 SP500_THRESHOLD = -19.0
 UNEMPLOYMENT_THRESHOLD = 2
 FED_TAX_THRESHOLD = -7.5
+MOM_NOISE_PCT = 1.5
 FED_TAX_PCT_MARGIN = 1.6
 BASELINE_MONTHS = 6
 
@@ -55,10 +56,6 @@ NAMED_EVENTS = {
 }
 
 
-# =========================
-# Helper functions
-# =========================
-
 def _months_diff(a: pd.Timestamp, b: pd.Timestamp) -> int:
     return (a.year - b.year) * 12 + (a.month - b.month)
 
@@ -69,14 +66,6 @@ def _find_periods_fall(
     recovery_threshold: float,
     pct_margin: float = 0.0,
 ) -> list:
-    """
-    Find falling periods using local peaks and explicit recovery.
-
-    This robust version removes zero or negative values before calculating
-    percentage changes, because percentage changes cannot be calculated
-    with a zero denominator.
-    """
-
     series = series.dropna()
     series = series[series > 0]
 
@@ -91,17 +80,10 @@ def _find_periods_fall(
     trough_val = peak_val
 
     for date, value in series.items():
-
-        if value <= 0:
-            continue
-
         if not in_down:
             if value > peak_val:
                 peak_val = value
                 peak_date = date
-                continue
-
-            if peak_val <= 0:
                 continue
 
             peak_pct_diff = abs(value - peak_val) / peak_val * 100
@@ -119,9 +101,6 @@ def _find_periods_fall(
 
         else:
             trough_val = min(trough_val, value)
-
-            if trough_val <= 0:
-                continue
 
             recovery_pct = (value - trough_val) / trough_val * 100
 
@@ -159,10 +138,6 @@ def _find_periods_unemp(
     pp_margin: float = 0.0,
     confirm_months: int = 3,
 ) -> list:
-    """
-    Find unemployment rise periods with confirmation requirement.
-    """
-
     series = series.dropna()
 
     if series.empty:
@@ -177,7 +152,6 @@ def _find_periods_unemp(
     peak_val = trough_val
 
     for date, value in series.items():
-
         if not in_up:
             if value < trough_val:
                 trough_val = value
@@ -236,13 +210,6 @@ def _build_event_metadata(
     named_events: dict,
     direction: str = "down",
 ):
-    """
-    Build event metadata.
-
-    Output per event:
-    name, start date, extreme date, event start date.
-    """
-
     named_ts = {
         name: (pd.Timestamp(s), pd.Timestamp(e))
         for name, (s, e) in named_events.items()
@@ -294,10 +261,6 @@ def _first_rise_period(
     recovery_threshold: float,
     confirm_months: int,
 ) -> tuple:
-    """
-    Re-scan from start and return first unemployment rise period.
-    """
-
     sub = series[series.index >= start].dropna()
 
     periods = _find_periods_unemp(
@@ -327,10 +290,6 @@ def _first_fall_period(
     recovery_threshold: float,
     pct_margin: float,
 ) -> tuple:
-    """
-    Re-scan from start and return first tax fall period.
-    """
-
     sub = series[series.index >= start].dropna()
     sub = sub[sub > 0]
 
@@ -354,15 +313,7 @@ def _first_fall_period(
     return p_start, trough_dt, lag
 
 
-# =========================
-# Event study
-# =========================
-
 def build_events(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build event-study rows using real_close instead of nominal close.
-    """
-
     close = df["real_close"].dropna()
     close = close[close > 0]
 
@@ -391,7 +342,6 @@ def build_events(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         window = close[pd.Timestamp(ns):pd.Timestamp(ne)]
-        window = window[window > 0]
 
         if window.empty:
             continue
@@ -490,10 +440,6 @@ def build_events(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def aggregate_event_study(raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Average changes across events per lag, with a one-sample t-test vs 0.
-    """
-
     rows = []
 
     for lag, sub in raw.groupby("lag"):
@@ -528,63 +474,11 @@ def aggregate_event_study(raw: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# =========================
-# Cross-correlation
-# =========================
-
-def run_cross_correlation(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pearson correlation between real S&P 500 monthly return and future changes
-    in unemployment and tax receipts.
-    """
-
-    sp = df["real_pct_change"].dropna()
-
-    rows = []
-
-    for lag in range(1, MAX_LAG + 1):
-        future_u = df["pp_change_unrate"].shift(-lag)
-        future_t = df["pct_change_receipts"].shift(-lag)
-
-        aligned_u = pd.concat([sp, future_u], axis=1, sort=False).dropna()
-        aligned_t = pd.concat([sp, future_t], axis=1, sort=False).dropna()
-
-        r_u, p_u = (
-            stats.pearsonr(aligned_u.iloc[:, 0], aligned_u.iloc[:, 1])
-            if len(aligned_u) > 2
-            else (np.nan, np.nan)
-        )
-
-        r_t, p_t = (
-            stats.pearsonr(aligned_t.iloc[:, 0], aligned_t.iloc[:, 1])
-            if len(aligned_t) > 2
-            else (np.nan, np.nan)
-        )
-
-        rows.append(
-            {
-                "lag": lag,
-                "r_unemp": round(r_u, 4),
-                "p_unemp": round(p_u, 4),
-                "r_tax": round(r_t, 4),
-                "p_tax": round(p_t, 4),
-            }
-        )
-
-    return pd.DataFrame(rows)
-
-
-# =========================
-# Summary
-# =========================
-
-def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
+def print_summary(agg: pd.DataFrame) -> None:
     print("\n" + "=" * 70)
     print("ROBUSTNESS CHECK")
     print("Lag analysis using inflation-adjusted S&P 500 real prices")
     print("=" * 70)
-
-    print("\nPrimary method: Event Study")
 
     peak_u = agg.loc[agg["avg_unemp_change"].idxmax(), "lag"]
 
@@ -616,6 +510,7 @@ def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
         print("  Tax receipts: average stays above pre-event baseline across all lags")
 
     print("\nAggregated event-study changes by lag:")
+
     print(
         agg[
             [
@@ -628,23 +523,8 @@ def print_summary(agg: pd.DataFrame, xcorr: pd.DataFrame) -> None:
         ].to_string(index=False)
     )
 
-    print("\nSupporting method: Cross-Correlation")
-
-    peak_xu = xcorr.loc[xcorr["r_unemp"].abs().idxmax(), "lag"]
-    peak_xt = xcorr.loc[xcorr["r_tax"].abs().idxmax(), "lag"]
-
-    r_xu = xcorr.loc[xcorr["lag"] == peak_xu, "r_unemp"].values[0]
-    r_xt = xcorr.loc[xcorr["lag"] == peak_xt, "r_tax"].values[0]
-
-    print(f"  Strongest unemployment correlation: lag {peak_xu} months, r = {r_xu}")
-    print(f"  Strongest tax correlation: lag {peak_xt} months, r = {r_xt}")
-
     print("=" * 70 + "\n")
 
-
-# =========================
-# Main
-# =========================
 
 def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     print("Loading robustness dataset...")
@@ -660,7 +540,6 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     required_columns = [
         "real_close",
-        "real_pct_change",
         "unemployment_rate",
         "receipts_bn",
         "pp_change_unrate",
@@ -691,7 +570,10 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     n_events = events["name"].nunique()
 
-    print(f"  {n_events} events detected with real price drawdown threshold {SP500_THRESHOLD}%:")
+    print(
+        f"  {n_events} events detected with real price drawdown threshold "
+        f"{SP500_THRESHOLD}%:"
+    )
 
     for _, row in events.drop_duplicates("name").sort_values("sp500_start").iterrows():
         print(
@@ -705,22 +587,9 @@ def run() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     print("\nRunning event-study aggregation...")
     agg = aggregate_event_study(events)
 
-    print("Running cross-correlation analysis...")
-    xcorr = run_cross_correlation(df)
+    print_summary(agg)
 
-    results = agg.merge(
-        xcorr,
-        on="lag",
-        suffixes=("_event", "_xcorr"),
-    )
-
-    results.to_csv(LAG_OUT, index=False)
-
-    print(f"  Saved {LAG_OUT.name}")
-
-    print_summary(agg, xcorr)
-
-    return df, results, events
+    return df, agg, events
 
 
 if __name__ == "__main__":

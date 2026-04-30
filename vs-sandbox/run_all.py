@@ -43,17 +43,14 @@ if __name__ == "__main__":
         use_spark = messagebox.askyesno(
             "Pipeline configuration",
             "Use Apache Spark for the ETL build step?\n\n"
-            "⚠️  Spark has a ~30s JVM startup and is less efficient\n"
-            "for this dataset size (< 1000 rows).\n\n"
-            "Yes = PySpark  (outputs Parquet)\n"
-            "No  = Pandas   (outputs CSV, faster)"
+            "Spark has a JVM startup and is less efficient for this dataset size.\n\n"
+            "Yes = PySpark  (outputs merged_monthly.csv)\n"
+            "No  = Pandas   (outputs merged_monthly.csv, faster)"
         )
         root.destroy()
-
         if use_spark:
             from build_dataset_spark import build_dataset as build_spark
             build_spark()
-            analysis_path = PROJECT_ROOT / "data" / "processed" / "merged_monthly.parquet"
         else:
             build_dataset()
             analysis_path = None
