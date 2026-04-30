@@ -27,6 +27,7 @@ VISUALIZE_SCRIPT = PROJECT_ROOT / "src" / "02_analysis" / "visualize.py"
 DASHBOARD_SCRIPT = PROJECT_ROOT / "src" / "03_dashboard" / "dashboard.py"
 
 DBT_EXE = str(Path(sys.executable).parent / ("dbt.exe" if sys.platform == "win32" else "dbt"))
+STREAMLIT_EXE = str(Path(sys.executable).parent / ("streamlit.exe" if sys.platform == "win32" else "streamlit"))
 
 
 def print_section(title: str, char: str = "="):
@@ -173,7 +174,7 @@ def main():
     print_section("PHASE 4: INTERACTIVE DASHBOARD", "-")
     print("▶ Launching Streamlit dashboard in the background...")
     subprocess.Popen(
-        ["streamlit", "run", str(DASHBOARD_SCRIPT)],
+        [STREAMLIT_EXE, "run", str(DASHBOARD_SCRIPT)],
         cwd=PROJECT_ROOT,
     )
     print("  ✅ Dashboard started — opening at http://localhost:8501\n")
