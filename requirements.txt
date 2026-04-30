@@ -14,6 +14,7 @@ dbt-sqlite==1.10.0
 matplotlib==3.10.9
 seaborn==0.13.2
 plotly==6.7.0
+scipy==1.15.3
 
 # Dashboard
 streamlit==1.57.0
