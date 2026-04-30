@@ -68,6 +68,32 @@ def run_command(cmd: list[str], description: str, cwd: Path = None) -> bool:
         return False
 
 
+def write_dbt_profiles() -> Path:
+    """Write profiles.yml into the dbt project dir with absolute paths for this machine."""
+    raw_dir = PROJECT_ROOT / "data" / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    market_db = (raw_dir / "market_data.db").as_posix()
+    schema_dir = raw_dir.as_posix()
+
+    content = f"""transform:
+  outputs:
+    dev:
+      type: sqlite
+      threads: 1
+      database: "main"
+      schema: "main"
+      schemas_and_paths:
+        main: "{market_db}"
+      schema_directory: "{schema_dir}"
+  target: dev
+"""
+    profiles_path = DBT_PROJECT / "profiles.yml"
+    profiles_path.write_text(content)
+    print(f"  ✍  Wrote dbt profiles.yml → {profiles_path}")
+    return DBT_PROJECT
+
+
 def main():
     """Run the complete pipeline."""
     parser = argparse.ArgumentParser(description="Run the complete data pipeline")
@@ -98,19 +124,20 @@ def main():
     # Phase 2: DBT Transformations
     if not args.skip_transform:
         print_section("PHASE 2: DBT TRANSFORMATIONS", "-")
+        profiles_dir = write_dbt_profiles()
         success = run_command(
-            ["dbt", "run"],
+            ["dbt", "run", "--profiles-dir", str(profiles_dir)],
             "Running DBT models (staging → intermediate → marts)",
             cwd=DBT_PROJECT
         )
         if not success:
             print("❌ DBT transformation failed. Pipeline stopped.")
             return 1
-        
+
         # Run DBT tests
         print()
         run_command(
-            ["dbt", "test"],
+            ["dbt", "test", "--profiles-dir", str(profiles_dir)],
             "Running DBT tests",
             cwd=DBT_PROJECT
         )
