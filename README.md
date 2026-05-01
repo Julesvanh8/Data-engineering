@@ -7,6 +7,52 @@ This project uses an event-study approach to analyze the lagged effects of stock
 
 ---
 
+## 🚀 **Quic
+- Jules van Halder
+- Valerie
+- Mohamed
+
+---
+
+## 🎓 **For Instructors**
+
+### **Quick Evaluation:**
+1. **View Live Dashboard (No Setup):**  
+   https://data-engineering-6urgspnpbupgepmsrsturi.streamlit.app/
+
+2. **Read Comprehensive User Guide:**  
+   [USER_GUIDE.md](USER_GUIDE.md) - Complete installation and usage instructions
+
+3. **Run Locally (Optional):**
+   ```bash
+   git clone https://github.com/Julesvanh8/Data-engineering.git
+   cd Data-engineering
+   python3.12 -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
+   python src/orchestration/run_pipeline.py
+   ```
+
+### **Key Deliverables:**
+- ✅ Interactive Dashboard (Streamlit Cloud)
+- ✅ Complete Pipeline Code (GitHub)
+- ✅ DBT Models (SQL transformations)
+- ✅ Analysis Results (CSV + visualizations)
+- ✅ Comprehensive Documentation
+
+---
+
+## 🔗 Links
+
+- **Live Dashboard:** https://data-engineering-6urgspnpbupgepmsrsturi.streamlit.app/
+- **User Guide:** [USER_GUIDE.md](USER_GUIDE.md)
+- **Project Repository:** https://github.com/Julesvanh8/Data-engineering
+- **Local Dashboard:** http://localhost:8501 (when running)
+- **DBT Docs:** http://localhost:8080 (when running) 🌐 **Live Dashboard:** https://data-engineering-6urgspnpbupgepmsrsturi.streamlit.app/
+- 📘 **User Guide (For Instructors):** [USER_GUIDE.md](USER_GUIDE.md)
+- 📊 **GitHub Repository:** https://github.com/Julesvanh8/Data-engineering
+
+---
+
 ## 🏗️ Modern Architecture
 
 This project follows a clean, modular **Raw → SQL → DBT → Analysis** architecture:
