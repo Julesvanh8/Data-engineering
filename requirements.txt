@@ -6,10 +6,6 @@ numpy==2.2.6
 requests==2.33.1
 python-dotenv==1.2.2
 
-# DBT and SQL
-dbt-core==1.11.8
-dbt-sqlite==1.10.0
-
 # Analysis and visualization
 matplotlib==3.10.9
 seaborn==0.13.2
@@ -18,3 +14,6 @@ scipy==1.15.3
 
 # Dashboard
 streamlit==1.57.0
+
+# Note: DBT packages removed for Streamlit Cloud compatibility
+# For local development, install separately with: pip install dbt-core dbt-sqlite

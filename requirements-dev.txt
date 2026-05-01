@@ -1,0 +1,10 @@
+# Development Requirements (Full Pipeline with DBT)
+# Install after requirements.txt with: pip install -r requirements-dev.txt
+
+# DBT and SQL transformation tools
+dbt-core==1.11.8
+dbt-sqlite==1.10.0
+
+# Additional development tools (optional)
+jupyter
+ipython
